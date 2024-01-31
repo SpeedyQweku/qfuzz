@@ -69,7 +69,7 @@ func init() {
 		flagSet.StringVarP(&outputFile, "output", "o", "", "Output file path"),
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
-		flagSet.StringSliceVarP(&matchTitle, "match-title", "mt", nil, "match response with specified title (-mt swagger,openai)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVarP(&matchTitle, "match-title", "mt", nil, "match response with specified title (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("optimizations", "OPTIMIZATIONS",
 		flagSet.IntVar(&workerCount, "c", 50, "set the concurrency level"),
