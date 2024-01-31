@@ -23,5 +23,5 @@ GET match title fuzzing
 Fuzz and check if matched title is in
 
 ```bash
-qfuzz -w < wordlist.txt > -l < urls.txt > -mt example,Fuzz
+qfuzz -w < wordlist.txt > -l < urls.txt > -ms example,Fuzz
 ```
