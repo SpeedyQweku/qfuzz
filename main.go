@@ -69,7 +69,7 @@ func init() {
 		flagSet.StringVarP(&outputFile, "output", "o", "", "Output file path"),
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
-		flagSet.StringSliceVarP(&matchStrings, "match-strings", "ms", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVarP(&matchStrings, "match-strings", "ms", nil, "match response with specified string/strings (-ms example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("optimizations", "OPTIMIZATIONS",
 		flagSet.IntVar(&workerCount, "c", 50, "set the concurrency level"),
