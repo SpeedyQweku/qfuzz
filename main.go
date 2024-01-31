@@ -45,7 +45,7 @@ var (
 	outputFile       string
 	wordlistFile     string
 	urlFile          string
-	matchTitle       goflags.StringSlice
+	matchStrings       goflags.StringSlice
 	userAgents       []string
 	followRedirect   bool
 	verbose          bool
@@ -55,7 +55,7 @@ var (
 	workerCount      int
 	retries          int
 	jobBufferSize    = workerCount * 2 // Increased buffer size
-	resultBufferSize = workerCount * 5 // Limit the number of results stored in memory
+	resultBufferSize = workerCount * 100 // Limit the number of results stored in memory
 )
 
 func init() {
@@ -69,7 +69,7 @@ func init() {
 		flagSet.StringVarP(&outputFile, "output", "o", "", "Output file path"),
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
-		flagSet.StringSliceVarP(&matchTitle, "match-title", "mt", nil, "match response with specified title (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVarP(&matchStrings, "match-strings", "ms", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("optimizations", "OPTIMIZATIONS",
 		flagSet.IntVar(&workerCount, "c", 50, "set the concurrency level"),
@@ -84,7 +84,6 @@ func init() {
 		flagSet.BoolVarP(&verbose, "verbose", "v", false, "verbose mode"),
 		flagSet.BoolVarP(&silent, "silent", "s", true, "silent mode"),
 	)
-	workerCount = workerCount * 100
 
 	_ = flagSet.Parse()
 
@@ -184,8 +183,8 @@ func matchRespTitle(body []byte, titles []string) bool {
 }
 
 func detectMatch(fullURL string, resp *http.Response) bool {
-	// check if input matchTitle(s) have been provided
-	if resp.StatusCode == http.StatusOK && len(matchTitle) > 0 {
+	// check if input matchStrings(s) have been provided
+	if resp.StatusCode == http.StatusOK && len(matchStrings) > 0 {
 		body, err := readResponseBody(resp)
 		if err != nil {
 			silentModeEr(silent, fullURL, err)
@@ -202,8 +201,7 @@ func detectMatch(fullURL string, resp *http.Response) bool {
 		title := bodyTitle.Find("title").Text()
 		responseText := bodyTitle.Text()
 
-		if matchRespTitle([]byte(responseText), matchTitle) || matchRespTitle([]byte(title), matchTitle) {
-			// gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, resp.StatusCode, fullURL, resp.ContentLength)
+		if matchRespTitle([]byte(responseText), matchStrings) || matchRespTitle([]byte(title), matchStrings) {
 			return true
 		} else {
 			return false
@@ -276,7 +274,7 @@ func makeRequest(url string, word string) (*http.Response, string) {
 			return nil, fullURL
 		}
 	}
-	if len(matchTitle) > 0 {
+	if len(matchStrings) > 0 {
 		// Read the response body into a variable before closing
 		body, err := readResponseBody(resp)
 		if err != nil {
@@ -336,8 +334,8 @@ func silentModeEr(silent bool, urlStr string, message error) {
 func main() {
 	startTime := time.Now()
 	gologger.Info().Msg("dfuzz is running...")
-	if len(matchTitle) > 0 {
-		gologger.Info().Msgf("Match Title : " + Yellow + "Enable %v"  + Reset, matchTitle)
+	if len(matchStrings) > 0 {
+		gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, matchStrings)
 	} else {
 		gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
 	}
@@ -381,14 +379,17 @@ func main() {
 	// Start a goroutine to handle results concurrently
 	go func() {
 		for result := range results {
-			if result.status == http.StatusOK && successFile != nil && len(matchTitle) == 0{
+			if result.status == http.StatusOK && successFile != nil && len(matchStrings) == 0 {
 				// Save the URL to the success file
 				_, err := fmt.Fprintf(successFile, "%s\n", result.url)
 				if err != nil {
 					gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
 				}
+				gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
+			} else if result.status != http.StatusOK && successFile != nil && len(matchStrings) == 0 && verbose {
+				verboseMode(verbose, result.status, result.url, result.contentLen)
 			}
-			if len(matchTitle) > 0 {
+			if len(matchStrings) > 0 {
 				if detectMatch(result.url, result.body) {
 					if successFile != nil {
 						// Save the URL to the success file
@@ -396,16 +397,22 @@ func main() {
 						if err != nil {
 							gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
 						}
+						gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
+					} else {
+						gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
 					}
-					gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset,result.url)
 				} else {
-					verboseMode(verbose, result.status, result.url, result.contentLen)
+					if successFile != nil {
+						verboseMode(verbose, result.status, result.url, result.contentLen)
+					} else {
+						verboseMode(verbose, result.status, result.url, result.contentLen)
+					}
 				}
 			}
-			if result.status == http.StatusOK && len(matchTitle) == 0 && successFile == nil {
+			if result.status == http.StatusOK && len(matchStrings) == 0 && successFile == nil {
 				gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
 			}
-			if result.status == http.StatusOK && len(matchTitle) == 0 && successFile == nil && verbose {
+			if result.status != http.StatusOK && len(matchStrings) == 0 && successFile == nil && verbose {
 				verboseMode(verbose, result.status, result.url, result.contentLen)
 			}
 		}
