@@ -49,10 +49,10 @@ const (
 
 // Result struct to represent the result of an HTTP request
 type Result struct {
-	Status   int
+	Status        int
 	ContentLength int64
-	URL      string
-	Match    bool
+	URL           string
+	Match         bool
 }
 
 type config struct {
@@ -484,10 +484,24 @@ func verboseMode(verbose bool, sCode int, fUrl string, cLen int64) {
 	if verbose {
 		if sCode == 404 {
 			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Not Found]" + Reset))
+		} else if sCode == 401 {
+			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Unauthorized]" + Reset))
+		} else if sCode == 400 {
+			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Bad Request]" + Reset))
 		} else if sCode == 403 {
-			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Forbidden]" + Reset))
+			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Forbidden]" + Reset))
+		} else if sCode == 405 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Method Not Allowed]" + Reset))
 		} else if sCode == 429 {
-			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Rate Limited]" + Reset))
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Rate Limited]" + Reset))
+		} else if sCode == 301 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Moved Permanently]" + Reset))
+		} else if sCode == 302 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Redirect Found]" + Reset))
+		} else if sCode == 307 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Temporary Redirect]" + Reset))
+		} else if sCode == 500 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Internal Server Error]" + Reset))
 		} else {
 			gologger.Info().Msgf("[%s%d%s] %s [%d]", Red, sCode, Reset, fUrl, cLen)
 		}
