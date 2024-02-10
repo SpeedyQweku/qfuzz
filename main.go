@@ -3,22 +3,39 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
+
+	"context"
 	"math/rand"
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	// "net"
+	// "crypto/tls"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/projectdiscovery/goflags"
 	"github.com/projectdiscovery/gologger"
+)
+
+var (
+	requestPool = sync.Pool{
+		New: func() interface{} {
+			return new(http.Request)
+		},
+	}
+	responsePool = sync.Pool{
+		New: func() interface{} {
+			return new(http.Response)
+		},
+	}
 )
 
 const (
@@ -27,29 +44,18 @@ const (
 	Blue   = "\033[34m"
 	Yellow = "\033[33m"
 	Cyan   = "\033[36m"
+	Green  = "\033[32m"
 )
 
-type job struct {
-	url  string
-	word string
+// Result struct to represent the result of an HTTP request
+type Result struct {
+	Status   int
+	ContentLength int64
+	URL      string
+	Match    bool
 }
 
-// // Newly add
-// type batch struct {
-//     urls []string
-//     word string
-// }
-// // end of it
-
-type result struct {
-	url        string
-	status     int
-	contentLen int64
-	body       *http.Response
-}
-
-var (
-	httpClient      *http.Client
+type config struct {
 	outputFile      string
 	wordlistFile    string
 	urlFile         string
@@ -60,67 +66,46 @@ var (
 	randomUserAgent bool
 	silent          bool
 	to              int
-	cConcurrency     int
+	cConcurrency    int
 	retries         int
-)
+	Http2           bool
+	successFile     *os.File
+}
+
+var cfg config
 
 func init() {
 	flagSet := goflags.NewFlagSet()
 	flagSet.SetDescription("dfuzz, fuzz urls for secrets...")
 	flagSet.CreateGroup("input", "INPUT",
-		flagSet.StringVarP(&wordlistFile, "wordlist", "w", "", "Wordlist file path"),
-		flagSet.StringVarP(&urlFile, "l", "list", "", "Target file path"),
+		flagSet.StringVarP(&cfg.wordlistFile, "wordlist", "w", "", "Wordlist file path"),
+		flagSet.StringVarP(&cfg.urlFile, "l", "list", "", "Target file path"),
 	)
 	flagSet.CreateGroup("output", "OUTPUT",
-		flagSet.StringVarP(&outputFile, "output", "o", "", "Output file path"),
+		flagSet.StringVarP(&cfg.outputFile, "output", "o", "", "Output file path"),
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
-		flagSet.StringSliceVarP(&matchStrings, "match-strings", "ms", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVarP(&cfg.matchStrings, "match-strings", "ms", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("optimizations", "OPTIMIZATIONS",
-		flagSet.IntVar(&cConcurrency, "c", 50, "number of concurrency to use"),
-		flagSet.IntVarP(&to, "to", "timeout", 10, "timeout (seconds)"),
+		flagSet.IntVar(&cfg.cConcurrency, "c", 40, "number of concurrency to use"),
+		flagSet.IntVarP(&cfg.to, "to", "timeout", 10, "timeout (seconds)"),
 	)
 	flagSet.CreateGroup("configurations", "CONFIGURATIONS",
-		flagSet.BoolVarP(&followRedirect, "fr", "follow-redirects", false, "Follow redirects"),
-		flagSet.BoolVar(&randomUserAgent, "random-agent", true, "enable Random User-Agent to use"),
-		flagSet.IntVar(&retries, "retries", 5, "number of retries, if status code is 429"),
+		flagSet.BoolVarP(&cfg.followRedirect, "fr", "follow-redirects", false, "Follow redirects"),
+		flagSet.BoolVar(&cfg.randomUserAgent, "random-agent", true, "enable Random User-Agent to use"),
+		flagSet.IntVar(&cfg.retries, "retries", 5, "number of retries, if status code is 429"),
+		flagSet.BoolVar(&cfg.Http2, "http2", false, "use HTTP2 protocol"),
 	)
 	flagSet.CreateGroup("debug", "DEBUG",
-		flagSet.BoolVarP(&verbose, "verbose", "v", false, "verbose mode"),
-		flagSet.BoolVarP(&silent, "silent", "s", false, "silent mode (default true)"),
+		flagSet.BoolVarP(&cfg.verbose, "verbose", "v", false, "verbose mode"),
+		flagSet.BoolVarP(&cfg.silent, "silent", "s", false, "silent mode (default true)"),
 	)
 
 	_ = flagSet.Parse()
 
-	// cConcurrency = cConcurrency * 100
-
-	// Initialize http.Client once
-	timeout := time.Duration(to) * time.Second // Replace with your timeout value
-	httpClient = &http.Client{
-		Transport: &http.Transport{
-			MaxConnsPerHost:     cConcurrency,     // Adjust as needed
-			MaxIdleConns:        cConcurrency,     // Adjust as needed
-			MaxIdleConnsPerHost: cConcurrency / 2, // Adjust as needed
-			IdleConnTimeout:     30 * time.Second,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-		},
-		Timeout: timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if followRedirect {
-				// Always allow redirects
-				return nil
-			} else {
-				// Don't follow redirects
-				return http.ErrUseLastResponse
-			}
-		},
-	}
-
 	// User-Agent list
-	userAgents = []string{
+	cfg.userAgents = []string{
 		"Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.9; rv:36.0) Gecko/20100101 Firefox/36.0",
 		"Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 6.1; WOW64; Trident/4.0; SLCC2; .NET CLR 2.0.50727; .NET CLR 3.5.30729; .NET CLR 3.0.30729; InfoPath.3; .NET4.0C; .NET4.0E)",
@@ -177,41 +162,267 @@ func init() {
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.2210.91",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.2210.91",
 	}
-
 }
 
-// //New add
-// func wConcurrency(batches <-chan batch, results chan<- result, wg *sync.WaitGroup) {
-//     defer wg.Done()
+var httpClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
+	Timeout:       time.Duration(time.Duration(cfg.to) * time.Second),
+	Transport: &http.Transport{
+		ForceAttemptHTTP2:   cfg.Http2,
+		MaxIdleConns:        1000,
+		MaxIdleConnsPerHost: 500,
+		MaxConnsPerHost:     500,
+		IdleConnTimeout:     time.Duration(time.Duration(cfg.to) * time.Second),
+		// DisableKeepAlives:   false, // Enable connection reuse
+		// DialContext: (&net.Dialer{
+		// 	Timeout: time.Duration(time.Duration(cfg.to) * time.Second),
+		// }).DialContext,
+		// TLSHandshakeTimeout: time.Duration(time.Duration(cfg.to) * time.Second),
+		// TLSClientConfig: &tls.Config{
+		// InsecureSkipVerify: true,
+		// 		MinVersion:         tls.VersionTLS10,
+		// 		Renegotiation:      tls.RenegotiateOnceAsClient,
+		// },
+	},
+}
 
-//     for batch := range batches {
-//         for _, url := range batch.urls {
-//             resp, fullURL := mGET(url, batch.word)
-//             if resp != nil {
-//                 results <- result{url: fullURL, status: resp.StatusCode, contentLen: resp.ContentLength, body: resp}
-//             }
-//         }
-//     }
-// }
-// //end of it
+func main() {
+	startTime := time.Now()
+	gologger.Info().Msg("dfuzz is running...")
 
-func wConcurrency(jobs <-chan job, results chan<- result, wg *sync.WaitGroup) {
-	defer wg.Done()
+	// Create a context with cancellation ability
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure the context is canceled when main function exits
 
-	for job := range jobs {
-		resp, url := mGET(job.url, job.word)
-		if resp != nil {
-			results <- result{url: url, status: resp.StatusCode, contentLen: resp.ContentLength, body: resp}
+	// Set up signal handling
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+
+	// Start a goroutine to listen for signals and cancel the context on signal
+	go func() {
+		select {
+		case sig := <-signalCh:
+			gologger.Info().Msgf("Caught keyboard: %v (Ctrl-C)", sig)
+			cancel()
+		case <-ctx.Done():
+			// Context canceled, no need to handle signals
 		}
-		/* else {
-			// Will handle the error later
-		} */
+	}()
+
+	if len(cfg.matchStrings) > 0 {
+		gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, cfg.matchStrings)
+	} else {
+		gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
+	}
+
+	if cfg.wordlistFile == "" || cfg.urlFile == "" {
+		gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist and -l" + Reset)
+	}
+
+	if !strings.HasSuffix(cfg.wordlistFile, ".txt") || !strings.HasSuffix(cfg.urlFile, ".txt") {
+		gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
+	}
+
+	if !cfg.followRedirect {
+		httpClient.CheckRedirect = nil
+	}
+
+	if cfg.cConcurrency == 0 {
+		gologger.Fatal().Msgf("%s-c Can't Be 0%s", Red, Reset)
+	}
+
+	// Read words from a wordlist file
+	words, err := readLines(cfg.wordlistFile)
+	if err != nil {
+		gologger.Fatal().Msgf("Error reading wordlist:", err)
+		return
+	}
+
+	urls, err := readLines(cfg.urlFile)
+	if err != nil {
+		gologger.Fatal().Msgf("Error reading URLs:", err)
+		return
+	}
+
+	if cfg.outputFile != "" {
+		cfg.successFile, err = os.Create(cfg.outputFile)
+		if err != nil {
+			gologger.Fatal().Msgf("Error creating success file: %v\n", err)
+		}
+		defer cfg.successFile.Close()
+	}
+
+	// Use a WaitGroup to wait for all goroutines to finish
+	var wg sync.WaitGroup
+
+	// Create a semaphore to limit concurrency
+	semaphore := make(chan struct{}, cfg.cConcurrency)
+
+	for _, word := range words {
+		for _, url := range urls {
+			wg.Add(1)               // Increment the wait group counter
+			semaphore <- struct{}{} // acquire semaphore
+			go makeRequest(url, word, &wg, semaphore, ctx, cfg.successFile)
+		}
+	}
+
+	// Start a goroutine to close the results channel once all requests are done
+	go func() {
+		wg.Wait()
+		close(semaphore)
+	}()
+
+	// Optionally wait for a user interrupt to exit gracefully
+	select {
+	case <-ctx.Done():
+		// Context canceled, exit gracefully
+		return
+	default:
+	}
+
+	elapsedTime := time.Since(startTime)
+	gologger.Info().Msgf("Total time taken: %s\n", elapsedTime)
+}
+
+func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, successFile *os.File) {
+	defer func() {
+		<-semaphore // release semaphore
+		wg.Done()
+	}()
+
+	var fullURL string
+
+	urls, err := neturl.Parse(url)
+	if err != nil {
+		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
+		return
+	}
+	if urls.Scheme == "" {
+		urls.Scheme = "https"
+	}
+
+	if strings.HasPrefix(word, "/") {
+		word = strings.TrimLeft(word, "/")
+	}
+	if strings.HasSuffix(urls.String(), "/") {
+		urlstr := strings.TrimRight(urls.String(), "/")
+		fullURL = fmt.Sprintf("%s/%s", urlstr, word)
+	} else {
+		fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
+	}
+
+	// Reuse http.Request and http.Response using sync.Pool
+	request := acquireRequest()
+	defer releaseRequest(request)
+	request.URL, _ = neturl.Parse(fullURL)
+
+	// Set User-Agent in the request header
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+
+	if cfg.randomUserAgent {
+		request.Header.Set("User-Agent", getRandomUserAgent())
+	} else {
+		request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	}
+
+	response := acquireResponse()
+	defer releaseResponse(response)
+	// Optionally wait for a user interrupt to exit gracefully
+	select {
+	case <-ctx.Done():
+		// Context canceled, exit gracefully
+		return
+	default:
+	}
+
+	// Make the HTTP request
+	resp, err := httpClient.Do(request.WithContext(ctx))
+	if err != nil {
+		silentModeEr(cfg.silent, fullURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		rateLimit(fullURL, resp.StatusCode, request)
+	}
+
+	var result Result
+	result.Status = resp.StatusCode
+	result.ContentLength = resp.ContentLength
+	result.URL = fullURL
+
+	if len(cfg.matchStrings) > 0 && resp.StatusCode == http.StatusOK {
+		result.Match = detectBodyMatch(fullURL, resp)
+	}
+
+	// Process the result
+	processResult(result, successFile, cfg.verbose, cfg.silent)
+}
+
+// processResult handles the result of an HTTP request
+func processResult(result Result, successFile *os.File, verbose, silent bool) {
+	if result.Status == http.StatusOK && successFile != nil && result.Match {
+		// Save the URL to the success file
+		_, err := fmt.Fprintf(successFile, "%s\n", result.URL)
+		if err != nil {
+			gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
+		}
+		gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
+	} else if result.Status != http.StatusOK && successFile != nil && !result.Match && verbose {
+		verboseMode(verbose, result.Status, result.URL, result.ContentLength)
+	} else if len(cfg.matchStrings) > 0 {
+		if result.Match {
+			if successFile != nil {
+				// Save the URL to the success file
+				_, err := fmt.Fprintf(successFile, "%s\n", result.URL)
+				if err != nil {
+					gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
+				}
+				gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
+			} else {
+				gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
+			}
+		} else {
+			if successFile != nil {
+				verboseMode(verbose, result.Status, result.URL, result.ContentLength)
+			} else {
+				verboseMode(verbose, result.Status, result.URL, result.ContentLength)
+			}
+		}
+	} else if result.Status == http.StatusOK && len(cfg.matchStrings) == 0 && successFile == nil {
+		gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
+	} else if result.Status != http.StatusOK && len(cfg.matchStrings) == 0 && successFile == nil && verbose {
+		verboseMode(verbose, result.Status, result.URL, result.ContentLength)
 	}
 }
 
-func getRandomUserAgent() string {
-	// Select a random User-Agent from the list
-	return userAgents[rand.Intn(len(userAgents))]
+func rateLimit(fullURL string, sCode int, request *http.Request) {
+	retryAttempts := 0
+	maxRetries := cfg.retries
+	for retryAttempts < maxRetries {
+		retryAttempts++
+		// Exponential backoff: wait for 2^retryAttempts seconds before retrying
+		backoffDuration := time.Duration(2<<retryAttempts+1) * time.Second
+		// log.Printf(Yellow+"Received 429 Too Many Requests. Retrying in %v seconds..."+Reset, backoffDuration.Seconds())
+		time.Sleep(backoffDuration)
+		// cfg.httpClient To httpClient
+		resp, err := httpClient.Do(request)
+		if err != nil {
+			silentModeEr(cfg.silent, fullURL, err)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusTooManyRequests {
+			break
+		}
+	}
+	if sCode == http.StatusTooManyRequests {
+		silentModeEr(cfg.silent, fullURL, errors.New("429 TooManyRequests"))
+		return
+	}
 }
 
 func readResponseBody(resp *http.Response) ([]byte, error) {
@@ -233,7 +444,7 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	return bodyBuffer.Bytes(), nil
 }
 
-func matchRespTitle(body []byte, titles []string) bool {
+func matchRespString(body []byte, titles []string) bool {
 	if len(titles) == 0 {
 		return false
 	}
@@ -245,169 +456,41 @@ func matchRespTitle(body []byte, titles []string) bool {
 	return false
 }
 
-func detectMatch(fullURL string, resp *http.Response) bool {
-	// check if input matchStrings(s) have been provided
-	if resp.StatusCode == http.StatusOK && len(matchStrings) > 0 {
-		body, err := readResponseBody(resp)
-		if err != nil {
-			silentModeEr(silent, fullURL, err)
-			return false
-		}
+func detectBodyMatch(fullURL string, resp *http.Response) bool {
+	body, err := readResponseBody(resp)
+	if err != nil {
+		silentModeEr(cfg.silent, fullURL, err)
+		return false
+	}
 
-		bodyReader := bytes.NewReader(body)
-		bodyTitle, err := goquery.NewDocumentFromReader(bodyReader)
-		if err != nil {
-			silentModeEr(silent, fullURL, err)
-			return false
-		}
+	bodyReader := bytes.NewReader(body)
+	bodyTitle, err := goquery.NewDocumentFromReader(bodyReader)
+	if err != nil {
+		silentModeEr(cfg.silent, fullURL, err)
+		return false
+	}
 
-		title := bodyTitle.Find("title").Text()
-		responseText := bodyTitle.Text()
+	title := bodyTitle.Find("title").Text()
+	responseText := bodyTitle.Text()
 
-		if matchRespTitle([]byte(responseText), matchStrings) || matchRespTitle([]byte(title), matchStrings) {
-			return true
+	if matchRespString([]byte(responseText), cfg.matchStrings) || matchRespString([]byte(title), cfg.matchStrings) {
+		return true
+	} else {
+		return false
+	}
+}
+
+func verboseMode(verbose bool, sCode int, fUrl string, cLen int64) {
+	if verbose {
+		if sCode == 404 {
+			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Not Found]" + Reset))
+		} else if sCode == 403 {
+			gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Forbidden]" + Reset))
+		} else if sCode == 429 {
+			gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Rate Limited]" + Reset))
 		} else {
-			return false
+			gologger.Info().Msgf("[%s%d%s] %s [%d]", Red, sCode, Reset, fUrl, cLen)
 		}
-	}
-	return false
-}
-
-func mGET(url string, word string) (*http.Response, string) {
-	var fullURL string
-	urls, err := neturl.Parse(url)
-	if err != nil {
-		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
-		return nil, fullURL
-	}
-	if urls.Scheme == "" {
-		urls.Scheme = "https"
-	}
-
-	if strings.HasPrefix(word, "/") {
-		word = strings.TrimLeft(word, "/")
-	}
-	if strings.HasSuffix(urls.String(), "/") {
-		urlstr := strings.TrimRight(urls.String(), "/")
-		fullURL = fmt.Sprintf("%s/%s", urlstr, word)
-	} else {
-		fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
-	}
-
-	req, err := http.NewRequest("GET", fullURL, nil)
-	if err != nil {
-		silentModeEr(silent, fullURL, err)
-		return nil, fullURL
-	}
-
-	// Set User-Agent header
-	if randomUserAgent {
-		req.Header.Set("User-Agent", getRandomUserAgent())
-	} else {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		silentModeEr(silent, fullURL, err)
-		return nil, fullURL
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAttempts := 0
-		maxRetries := retries
-		for retryAttempts < maxRetries {
-			retryAttempts++
-			// Exponential backoff: wait for 2^retryAttempts seconds before retrying
-			backoffDuration := time.Duration(2<<retryAttempts+1) * time.Second
-			// log.Printf(Yellow+"Received 429 Too Many Requests. Retrying in %v seconds..."+Reset, backoffDuration.Seconds())
-			time.Sleep(backoffDuration)
-			resp, err := httpClient.Do(req)
-			if err != nil {
-				silentModeEr(silent, fullURL, err)
-				return nil, fullURL
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusTooManyRequests {
-				break
-			}
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			silentModeEr(silent, fullURL, errors.New("429 TooManyRequests"))
-			return nil, fullURL
-		}
-	}
-	if len(matchStrings) > 0 {
-		// Read the response body into a variable before closing
-		body, err := readResponseBody(resp)
-		if err != nil {
-			silentModeEr(silent, fullURL, err)
-			return nil, fullURL
-		}
-
-		// Close the original response body
-		resp.Body.Close()
-
-		// Create a new response with the body
-		newResp := &http.Response{
-			Status:        resp.Status,
-			StatusCode:    resp.StatusCode,
-			Header:        resp.Header,
-			Body:          ioutil.NopCloser(bytes.NewReader(body)),
-			ContentLength: resp.ContentLength,
-		}
-		return newResp, fullURL
-	}
-
-	return resp, fullURL
-}
-
-// // new code
-// func readUrlFromFile(wordlist string, urlFilename string, urls *[]string) error {
-//     file, err := os.Open(urlFilename)
-//     if err != nil {
-//         return err
-//     }
-//     defer file.Close()
-
-//     scanner := bufio.NewScanner(file)
-//     for scanner.Scan() {
-//         url := scanner.Text()
-//         *urls = append(*urls, url)
-//     }
-
-//     if err := scanner.Err(); err != nil {
-//         return err
-//     }
-
-//     return nil
-// }
-// // end of it
-
-func readUrlFromFile(wordlist string, urlFilename string, jobs chan<- job) error {
-	file, err := os.Open(urlFilename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		url := scanner.Text()
-		jobs <- job{url: url, word: wordlist}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func verboseMode(verbose bool, status int, url string, contentLen int64) {
-	if verbose && status != 0 {
-		gologger.Print().Msgf(Red+"%d -> %s -> %d"+Reset, status, url, contentLen)
 	}
 }
 
@@ -417,277 +500,39 @@ func silentModeEr(silent bool, urlStr string, message error) {
 	}
 }
 
-func main() {
-	startTime := time.Now()
-	gologger.Info().Msg("dfuzz is running...")
-	if len(matchStrings) > 0 {
-		gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, matchStrings)
-	} else {
-		gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
-	}
-
-	if wordlistFile == "" || urlFile == "" {
-		gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist and -l" + Reset)
-	}
-
-	if !strings.HasSuffix(wordlistFile, ".txt") || !strings.HasSuffix(urlFile, ".txt") {
-		gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
-	}
-
-	// Seting the BufferSize by using cConcurrency
-	jobBufferSize := cConcurrency * 10       // Increased buffer size
-	resultBufferSize := cConcurrency*10 + 10 // Limit the number of results stored in memory
-
-	jobs := make(chan job, jobBufferSize)          // Increased buffer size
-	results := make(chan result, resultBufferSize) // Limit the number of results in memory
-	var wg sync.WaitGroup
-
-	// // DEBUGGING THE cConcurrency
-	// fmt.Println(cConcurrency)
-	// fmt.Println(jobBufferSize)
-	// fmt.Println(resultBufferSize)
-
-	// DEBUGING ERROR MSG
-	// n := errors.New("429 TooMuchRes")
-	// fmt.Println(n)
-	// os.Exit(1)
-	/* //DEBUG THE TIMEOUT
-	// fmt.Println(20000000000 * time.Nanosecond)
-	// fmt.Println(20000000000 * time.Microsecond)
-	fmt.Println(time.Duration(20)*time.Second)
-	timeout := time.Duration(to)*time.Second // Replace with your timeout value
-	fmt.Println(timeout) */
-	// os.Exit(1)
-
-	// Start workers
-	for i := 0; i < cConcurrency; i++ {
-		wg.Add(1)
-		go wConcurrency(jobs, results, &wg)
-	}
-
-	// Read wordlist from file
-	wordlistFile, err := os.Open(wordlistFile)
-	if err != nil {
-		gologger.Fatal().Msgf("Error opening wordlist file: %v\n", err)
-		return
-	}
-	defer wordlistFile.Close()
-
-	// File to save URLs with status code 200
-	var successFile *os.File
-	if outputFile != "" {
-		successFile, err = os.Create(outputFile)
-		if err != nil {
-			gologger.Fatal().Msgf("Error creating success file: %v\n", err)
-		}
-		defer successFile.Close()
-	}
-
-	// Start a goroutine to handle results concurrently
-	go func() {
-		for result := range results {
-			if result.status == http.StatusOK && successFile != nil && len(matchStrings) == 0 {
-				// Save the URL to the success file
-				_, err := fmt.Fprintf(successFile, "%s\n", result.url)
-				if err != nil {
-					gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
-				}
-				gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
-			} else if result.status != http.StatusOK && successFile != nil && len(matchStrings) == 0 && verbose {
-				verboseMode(verbose, result.status, result.url, result.contentLen)
-			} else if len(matchStrings) > 0 {
-				if detectMatch(result.url, result.body) {
-					if successFile != nil {
-						// Save the URL to the success file
-						_, err := fmt.Fprintf(successFile, "%s\n", result.url)
-						if err != nil {
-							gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
-						}
-						gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
-					} else {
-						gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
-					}
-				} else {
-					if successFile != nil {
-						verboseMode(verbose, result.status, result.url, result.contentLen)
-					} else {
-						verboseMode(verbose, result.status, result.url, result.contentLen)
-					}
-				}
-			} else if result.status == http.StatusOK && len(matchStrings) == 0 && successFile == nil {
-				gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
-			} else if result.status != http.StatusOK && len(matchStrings) == 0 && successFile == nil && verbose {
-				verboseMode(verbose, result.status, result.url, result.contentLen)
-			}
-		}
-	}()
-
-	wordlistScanner := bufio.NewScanner(wordlistFile)
-	for wordlistScanner.Scan() {
-		wordlist := wordlistScanner.Text()
-
-		// Read URLs from file and send jobs to the channel
-		if err := readUrlFromFile(wordlist, urlFile, jobs); err != nil {
-			gologger.Fatal().Msgf("Error reading URL from file: %v\n", err)
-			return
-		}
-	}
-
-	// Close the jobs channel after all wordlists and URLs have been processed
-	close(jobs)
-
-	// Wait for the workers to finish processing
-	wg.Wait()
-
-	// Close the results channel
-	close(results)
-
-	elapsedTime := time.Since(startTime)
-	gologger.Info().Msgf("Total time taken: "+Cyan+"%s"+Reset, elapsedTime)
+// Select a random User-Agent from the list
+func getRandomUserAgent() string {
+	return cfg.userAgents[rand.Intn(len(cfg.userAgents))]
 }
 
-// //New add
-// func main() {
-//     startTime := time.Now()
-//     gologger.Info().Msg("dfuzz is running...")
-//     if len(matchStrings) > 0 {
-//         gologger.Info().Msgf("Match Title : " + Yellow + "Enable %v" + Reset, matchStrings)
-//     } else {
-//         gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
-//     }
+// HTTP Pool
+func acquireRequest() *http.Request {
+	return requestPool.Get().(*http.Request)
+}
+func releaseRequest(req *http.Request) {
+	req.URL = nil
+	requestPool.Put(req)
+}
+func acquireResponse() *http.Response {
+	return responsePool.Get().(*http.Response)
+}
+func releaseResponse(resp *http.Response) {
+	responsePool.Put(resp)
+}
 
-//     if wordlistFile == "" || urlFile == "" {
-//         gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist and -l" + Reset)
-//     }
+// Reading A File Line By Line
+func readLines(filename string) ([]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 
-//     if !strings.HasSuffix(wordlistFile, ".txt") || !strings.HasSuffix(urlFile, ".txt") {
-//         gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
-//     }
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
 
-//     // Seting the BufferSize by using cConcurrency
-//     jobBufferSize := cConcurrency * 5        // Increased buffer size
-//     resultBufferSize := cConcurrency*10 + 10 // Limit the number of results stored in memory
-
-//     // jobs := make(chan job, jobBufferSize)          // Increased buffer size
-//     results := make(chan result, resultBufferSize) // Limit the number of results in memory
-//     batches := make(chan batch, cConcurrency)       // Channel for batches
-//     var wg sync.WaitGroup
-
-//     // DEBUGGING THE cConcurrency
-//     fmt.Println(cConcurrency)
-//     fmt.Println(jobBufferSize)
-//     fmt.Println(resultBufferSize)
-
-//     // DEBUGING ERROR MSG
-//     // n := errors.New("429 TooMuchRes")
-//     // fmt.Println(n)
-//     // os.Exit(1)
-//     /* //DEBUG THE TIMEOUT
-//     // fmt.Println(20000000000 * time.Nanosecond)
-//     // fmt.Println(20000000000 * time.Microsecond)
-//     fmt.Println(time.Duration(20)*time.Second)
-//     timeout := time.Duration(to)*time.Second // Replace with your timeout value
-//     fmt.Println(timeout) */
-//     // os.Exit(1)
-
-//     // Start workers
-//     for i := 0; i < cConcurrency; i++ {
-//         wg.Add(1)
-//         go wConcurrency(batches, results, &wg)
-//     }
-
-//     // Read wordlist from file
-//     wordlistFile, err := os.Open(wordlistFile)
-//     if err != nil {
-//         gologger.Fatal().Msgf("Error opening wordlist file: %v\n", err)
-//         return
-//     }
-//     defer wordlistFile.Close()
-
-//     // File to save URLs with status code 200
-//     var successFile *os.File
-//     if outputFile != "" {
-//         successFile, err = os.Create(outputFile)
-//         if err != nil {
-//             gologger.Fatal().Msgf("Error creating success file: %v\n", err)
-//         }
-//         defer successFile.Close()
-//     }
-
-//     // Start a goroutine to handle results concurrently
-//     go func() {
-//         for result := range results {
-//             if result.status == http.StatusOK && successFile != nil && len(matchStrings) == 0 {
-//                 // Save the URL to the success file
-//                 _, err := fmt.Fprintf(successFile, "%s\n", result.url)
-//                 if err != nil {
-//                     gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
-//                 }
-//                 gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
-//             } else if result.status != http.StatusOK && successFile != nil && len(matchStrings) == 0 && verbose {
-//                 verboseMode(verbose, result.status, result.url, result.contentLen)
-//             } else if len(matchStrings) > 0 {
-//                 if detectMatch(result.url, result.body) {
-//                     if successFile != nil {
-//                         // Save the URL to the success file
-//                         _, err := fmt.Fprintf(successFile, "%s\n", result.url)
-//                         if err != nil {
-//                             gologger.Fatal().Msgf("Error writing to success file: %v\n", err)
-//                         }
-//                         gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
-//                     } else {
-//                         gologger.Print().Msgf(Blue+"Matched Title Detected -> %s "+Reset, result.url)
-//                     }
-//                 } else {
-//                     if successFile != nil {
-//                         verboseMode(verbose, result.status, result.url, result.contentLen)
-//                     } else {
-//                         verboseMode(verbose, result.status, result.url, result.contentLen)
-//                     }
-//                 }
-//             } else if result.status == http.StatusOK && len(matchStrings) == 0 && successFile == nil {
-//                 gologger.Print().Msgf(Blue+"%d -> %s -> %d"+Reset, result.status, result.url, result.contentLen)
-//             } else if result.status != http.StatusOK && len(matchStrings) == 0 && successFile == nil && verbose {
-//                 verboseMode(verbose, result.status, result.url, result.contentLen)
-//             }
-//         }
-//     }()
-
-//     wordlistScanner := bufio.NewScanner(wordlistFile)
-//     for wordlistScanner.Scan() {
-//         wordlist := wordlistScanner.Text()
-
-//         // Read URLs from file and create batches
-//         var urls []string
-//         if err := readUrlFromFile(wordlist, urlFile, &urls); err != nil {
-//             gologger.Fatal().Msgf("Error reading URL from file: %v\n", err)
-//             return
-//         }
-
-//         // Split the URLs into batches (e.g., batches of 10 URLs)
-//         batchSize := 500
-//         for i := 0; i < len(urls); i += batchSize {
-//             end := i + batchSize
-//             if end > len(urls) {
-//                 end = len(urls)
-//             }
-
-//             // Send a batch to the workers
-//             batches <- batch{urls: urls[i:end], word: wordlist}
-//         }
-//     }
-
-//     // Close the batches channel after all wordlists and URLs have been processed
-//     close(batches)
-
-//     // Wait for the workers to finish processing
-//     wg.Wait()
-
-//     // Close the results channel
-//     close(results)
-
-//     elapsedTime := time.Since(startTime)
-//     gologger.Info().Msgf("Total time taken: " + Cyan + "%s" + Reset, elapsedTime)
-// }
-
-// // End of it
+	return lines, scanner.Err()
+}
