@@ -70,6 +70,7 @@ type config struct {
 	retries         int
 	Http2           bool
 	successFile     *os.File
+	urlString       goflags.StringSlice
 }
 
 var cfg config
@@ -80,6 +81,7 @@ func init() {
 	flagSet.CreateGroup("input", "INPUT",
 		flagSet.StringVarP(&cfg.wordlistFile, "wordlist", "w", "", "Wordlist file path"),
 		flagSet.StringVarP(&cfg.urlFile, "l", "list", "", "Target file path"),
+		flagSet.StringSliceVar(&cfg.urlString, "u", nil, "Target url/urls (-u https://example.com,https://example.org)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("output", "OUTPUT",
 		flagSet.StringVarP(&cfg.outputFile, "output", "o", "", "Output file path"),
@@ -215,11 +217,11 @@ func main() {
 		gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
 	}
 
-	if cfg.wordlistFile == "" || cfg.urlFile == "" {
+	if cfg.wordlistFile == "" || (cfg.urlFile == "" && len(cfg.urlString) == 0){
 		gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist and -l" + Reset)
 	}
 
-	if !strings.HasSuffix(cfg.wordlistFile, ".txt") || !strings.HasSuffix(cfg.urlFile, ".txt") {
+	if !strings.HasSuffix(cfg.wordlistFile, ".txt") || (!strings.HasSuffix(cfg.urlFile, ".txt") && len(cfg.urlString) == 0) {
 		gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
 	}
 
@@ -238,10 +240,15 @@ func main() {
 		return
 	}
 
-	urls, err := readLines(cfg.urlFile)
-	if err != nil {
-		gologger.Fatal().Msgf("Error reading URLs:", err)
-		return
+	var urls []string
+	if cfg.urlFile != "" {
+		urls, err = readLines(cfg.urlFile)
+		if err != nil {
+			gologger.Fatal().Msgf("Error reading URLs:", err)
+			return
+		}
+	} else if len(cfg.urlString) > 0 {
+		urls = cfg.urlString
 	}
 
 	if cfg.outputFile != "" {
