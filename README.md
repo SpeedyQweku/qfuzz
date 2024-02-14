@@ -5,13 +5,13 @@ qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.1.1
+go install github.com/SpeedyQweku/qfuzz@v0.1.2
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.1.1
+qfuzz, fuzz, and more - v0.1.2
 
 INPUT:
    -wordlist, -w string  Wordlist file path
@@ -31,17 +31,16 @@ CONFIGURATIONS:
    -follow-redirects, -fr  Follow redirects
    -webcache               Detect web caching, (discoveredWebCache.txt)
    -random-agent           Enable Random User-Agent To use (default true)
-   -Retries int            number of Retries, if status code is 429 (default 5)
+   -retries int            number of Retries, if status code is 429 (default 5)
    -http2                  use HTTP2 protocol
 
 OPTIMIZATIONS:
    -c int             number of concurrency To use (default 40)
-   -timeout, -To int  timeout (seconds) (default 10)
+   -timeout, -to int  timeout (seconds) (default 10)
 
 DEBUG:
-   -v, -Verbose  Verbose mode
-   -s, -Silent   Silent mode (default true)
-
+   -v, -verbose  Verbose mode
+   -debug        Debug mode (default true)
 ```
 
 ### GET fuzzing
