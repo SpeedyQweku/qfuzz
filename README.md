@@ -5,13 +5,13 @@ qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.1.2
+go install github.com/SpeedyQweku/qfuzz@v0.1.3
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.1.2
+qfuzz, fuzz, and more - v0.1.3
 
 INPUT:
    -wordlist, -w string  Wordlist file path
@@ -50,6 +50,7 @@ Fuzz a list of URLs with the wordlists
 ```bash
 qfuzz -w < wordlist.txt > -l < urls.txt >
 ```
+
 ```bash
 qfuzz -u < URL >,< URL >... -w < wordlist.txt >
 ```
@@ -61,6 +62,7 @@ Fuzz a list of URLs with the wordlists
 ```bash
 qfuzz -X POST -d "username=admin\&password=password" -w < wordlist.txt > -l < urls.txt >
 ```
+
 ```bash
 qfuzz -X POST -d "username=admin\&password=password" -u < URL >,< URL >... -w < wordlist.txt >
 ```
@@ -72,6 +74,7 @@ Fuzz and check if a matched string is in
 ```bash
 qfuzz -w < wordlist.txt > -l < urls.txt > -ms example,Fuzz
 ```
+
 ```bash
 qfuzz -u < URL >,< URL >... -w < wordlist.txt > -ms example,Fuzz
 ```
