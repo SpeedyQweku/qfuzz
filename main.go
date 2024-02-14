@@ -100,7 +100,7 @@ func init() {
 	flagSet.CreateGroup("input", "INPUT",
 		flagSet.StringVarP(&cfg.WordlistFile, "w", "wordlist", "", "Wordlist file path"),
 		flagSet.StringVarP(&cfg.UrlFile, "l", "list", "", "Target file path"),
-		flagSet.StringSliceVar(&cfg.UrlString, "u", nil, "Target url/urls (-u https://example.com,https://example.org)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVar(&cfg.UrlString, "u", nil, "Target URL/URLs (-u https://example.com,https://example.org)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("output", "OUTPUT",
 		flagSet.StringVarP(&cfg.OutputFile, "o", "output", "", "Output file path"),
@@ -113,7 +113,7 @@ func init() {
 		flagSet.StringVarP(&cfg.PostData, "d", "data", "", "Data To include in the request body for POST method"),
 		flagSet.StringSliceVar(&cfg.Headers, "H", nil, "Headers To include in the request, (e.g., 'key1:value1,key2:value2')", goflags.CommaSeparatedStringSliceOptions),
 		flagSet.BoolVarP(&cfg.FollowRedirect, "fr", "follow-redirects", false, "Follow redirects"),
-		flagSet.BoolVar(&cfg.WebCache, "webcache", false, "Detect web caching, (discovedWebCache.txt)"),
+		flagSet.BoolVar(&cfg.WebCache, "webcache", false, "Detect web caching, (discoveredWebCache.txt)"),
 		flagSet.BoolVar(&cfg.RandomUserAgent, "random-agent", true, "Enable Random User-Agent To use"),
 		flagSet.IntVar(&cfg.Retries, "Retries", 5, "number of Retries, if status code is 429"),
 		flagSet.BoolVar(&cfg.Http2, "http2", false, "use HTTP2 protocol"),
@@ -308,7 +308,7 @@ func main() {
 	}
 
 	if cfg.WebCache {
-		cfg.Cachefile, err = os.OpenFile("discovedWebCache.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+		cfg.Cachefile, err = os.OpenFile("discoveredWebCache.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
 			golog.Fatal("Error opening log file: ", err)
 			// gologger.Fatal().Msgf("Error opening log file: %s", err)
