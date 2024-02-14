@@ -41,7 +41,7 @@ var (
 	}
 )
 
-var version = "v0.1.1"
+var version = "v0.1.2"
 
 const (
 	Reset  = "\033[0m"
@@ -78,7 +78,7 @@ type config struct {
 	FollowRedirect  bool
 	Verbose         bool
 	RandomUserAgent bool
-	Silent          bool
+	Debug           bool
 	Http2           bool
 	WebCache        bool
 	To              int
@@ -115,16 +115,16 @@ func init() {
 		flagSet.BoolVarP(&cfg.FollowRedirect, "fr", "follow-redirects", false, "Follow redirects"),
 		flagSet.BoolVar(&cfg.WebCache, "webcache", false, "Detect web caching, (discoveredWebCache.txt)"),
 		flagSet.BoolVar(&cfg.RandomUserAgent, "random-agent", true, "Enable Random User-Agent To use"),
-		flagSet.IntVar(&cfg.Retries, "Retries", 5, "number of Retries, if status code is 429"),
+		flagSet.IntVar(&cfg.Retries, "retries", 5, "number of Retries, if status code is 429"),
 		flagSet.BoolVar(&cfg.Http2, "http2", false, "use HTTP2 protocol"),
 	)
 	flagSet.CreateGroup("optimizations", "OPTIMIZATIONS",
 		flagSet.IntVar(&cfg.Concurrency, "c", 40, "number of concurrency To use"),
-		flagSet.IntVarP(&cfg.To, "To", "timeout", 10, "timeout (seconds)"),
+		flagSet.IntVarP(&cfg.To, "to", "timeout", 10, "timeout (seconds)"),
 	)
 	flagSet.CreateGroup("debug", "DEBUG",
-		flagSet.BoolVarP(&cfg.Verbose, "Verbose", "v", false, "Verbose mode"),
-		flagSet.BoolVarP(&cfg.Silent, "Silent", "s", false, "Silent mode (default true)"),
+		flagSet.BoolVarP(&cfg.Verbose, "verbose", "v", false, "Verbose mode"),
+		flagSet.BoolVar(&cfg.Debug, "debug", false, "Debug mode (default true)"),
 	)
 
 	_ = flagSet.Parse()
@@ -434,7 +434,7 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	// Make the HTTP request
 	resp, err := httpClient.Do(request.WithContext(ctx))
 	if err != nil {
-		silentModeEr(cfg.Silent, fullURL, err)
+		debugModeEr(cfg.Debug, fullURL, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -536,7 +536,7 @@ func rateLimit(fullURL string, sCode int, request *http.Request) {
 		// cfg.httpClient To httpClient
 		resp, err := httpClient.Do(request)
 		if err != nil {
-			silentModeEr(cfg.Silent, fullURL, err)
+			debugModeEr(cfg.Debug, fullURL, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -545,7 +545,7 @@ func rateLimit(fullURL string, sCode int, request *http.Request) {
 		}
 	}
 	if sCode == http.StatusTooManyRequests {
-		silentModeEr(cfg.Silent, fullURL, errors.New("429 TooManyRequests"))
+		debugModeEr(cfg.Debug, fullURL, errors.New("429 TooManyRequests"))
 		return
 	}
 }
@@ -585,14 +585,14 @@ func matchRespString(body []byte, titles []string) bool {
 func detectBodyMatch(fullURL string, resp *http.Response) bool {
 	body, err := readResponseBody(resp)
 	if err != nil {
-		silentModeEr(cfg.Silent, fullURL, err)
+		debugModeEr(cfg.Debug, fullURL, err)
 		return false
 	}
 
 	bodyReader := bytes.NewReader(body)
 	bodyTitle, err := goquery.NewDocumentFromReader(bodyReader)
 	if err != nil {
-		silentModeEr(cfg.Silent, fullURL, err)
+		debugModeEr(cfg.Debug, fullURL, err)
 		return false
 	}
 
@@ -648,8 +648,8 @@ func verboseMode(Verbose bool, sCode int, fUrl string, cLen int64) {
 	}
 }
 
-func silentModeEr(Silent bool, urlStr string, message error) {
-	if Silent {
+func debugModeEr(debug bool, urlStr string, message error) {
+	if debug {
 		golog.Error("Error making GET request To ", urlStr, " : ", message)
 		// gologger.Error().Msgf("Error making GET request To %s: %v", urlStr, message)
 	}
