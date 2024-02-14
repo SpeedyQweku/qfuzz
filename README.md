@@ -44,7 +44,7 @@ DEBUG:
 
 ```
 
-GET secret fuzzing
+### GET secret fuzzing
 
 Fuzz a list of URLs with the wordlists to find some secret
 
@@ -52,7 +52,7 @@ Fuzz a list of URLs with the wordlists to find some secret
 qfuzz -w < wordlist.txt > -l < urls.txt >
 ```
 
-GET match title fuzzing
+### GET match title fuzzing
 
 Fuzz and check if matched title is in
 
