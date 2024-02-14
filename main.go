@@ -237,26 +237,29 @@ func main() {
 		}
 	}()
 
-	if len(cfg.MatchStrings) > 0 {
-		golog.Info("Match Title : ", Yellow, "Enable ", cfg.MatchStrings, Reset)
-		// gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, cfg.MatchStrings)
-	} else {
-		golog.Info(Yellow + "Running In Defaul Mode" + Reset)
-		// gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
-	}
 	if cfg.HttpMethod == "" {
-		golog.Info(Yellow + "HTTP Method [GET]" + Reset)
+		golog.Info("HTTP Method : ", Yellow + "[GET]" + Reset)
 		// gologger.Info().Msgf(Yellow + "HTTP Method [GET]" + Reset)
 	} else {
-		golog.Info(Yellow, "HTTP Method ", "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
+		golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
 		// gologger.Info().Msgf(Yellow+"HTTP Method [%s]"+Reset, strings.ToUpper(cfg.HttpMethod))
 	}
 	if !cfg.Verbose {
-		golog.Info(Yellow + "Match Response Status [200]" + Reset)
+		golog.Info("Match Response Status : ", Yellow + "[200]" + Reset)
 		// gologger.Info().Msgf(Yellow + "Match Response Status [200]" + Reset)
 	} else {
-		golog.Info(Yellow + "Match Response Status [200-299,300-399,400-499,500-599]" + Reset)
+		golog.Info("Match Response Status : ", Yellow + "[200-299,300-399,400-499,500-599]" + Reset)
 		// gologger.Info().Msgf(Yellow + "Match Response Status [200-299,300-399,400-499,500-599]" + Reset)
+	}
+	if len(cfg.MatchStrings) > 0 {
+		golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
+		// gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, cfg.MatchStrings)
+	} // else {
+	// 	golog.Info(Yellow + "Running In Defaul Mode" + Reset)
+	// 	// gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
+	// }
+	if cfg.WebCache {
+		golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
 	}
 
 	if cfg.WordlistFile == "" || (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
