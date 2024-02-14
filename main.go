@@ -41,7 +41,7 @@ var (
 	}
 )
 
-var version = "v0.1.2"
+var version = "v0.1.3"
 
 const (
 	Reset  = "\033[0m"
