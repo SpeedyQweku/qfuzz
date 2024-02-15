@@ -18,14 +18,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
 	// "net"
 	// "crypto/tls"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/kataras/golog"
 	"github.com/projectdiscovery/goflags"
-	// "github.com/projectdiscovery/gologger"
+	"github.com/projectdiscovery/gologger"
 )
 
 var (
@@ -41,7 +39,7 @@ var (
 	}
 )
 
-var version = "v0.1.3"
+var version = "v0.1.4"
 
 const (
 	Reset  = "\033[0m"
@@ -63,7 +61,8 @@ const (
 
 // Result struct To represent the result of an HTTP request
 type Result struct {
-	Status        int
+	StatusCode    int
+	Status        string
 	ContentLength int64
 	URL           string
 	Match         bool
@@ -73,10 +72,9 @@ type config struct {
 	OutputFile      string
 	WordlistFile    string
 	UrlFile         string
-	MatchStrings    goflags.StringSlice
 	UserAgents      []string
 	FollowRedirect  bool
-	Verbose         bool
+	Silent          bool
 	RandomUserAgent bool
 	Debug           bool
 	Http2           bool
@@ -88,6 +86,8 @@ type config struct {
 	Cachefile       *os.File
 	UrlString       goflags.StringSlice
 	Headers         goflags.StringSlice
+	MatchStrings    goflags.StringSlice
+	MatchStatus     goflags.StringSlice
 	PostData        string
 	HttpMethod      string
 }
@@ -107,6 +107,7 @@ func init() {
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
 		flagSet.StringSliceVarP(&cfg.MatchStrings, "ms", "match-strings", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVar(&cfg.MatchStatus, "mc", nil, "Match HTTP status codes, (default 200-299,301,302,307,401,403,405,500)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("configurations", "CONFIGURATIONS",
 		flagSet.StringVar(&cfg.HttpMethod, "X", "", "HTTP method To use in the request, (e.g., GET, POST, PUT, DELETE)"),
@@ -123,8 +124,8 @@ func init() {
 		flagSet.IntVarP(&cfg.To, "to", "timeout", 10, "timeout (seconds)"),
 	)
 	flagSet.CreateGroup("debug", "DEBUG",
-		flagSet.BoolVarP(&cfg.Verbose, "verbose", "v", false, "Verbose mode"),
-		flagSet.BoolVar(&cfg.Debug, "debug", false, "Debug mode (default true)"),
+		flagSet.BoolVar(&cfg.Silent, "silent", false, "Silent mode"),
+		flagSet.BoolVar(&cfg.Debug, "debug", false, "Debug mode"),
 	)
 
 	_ = flagSet.Parse()
@@ -213,9 +214,10 @@ var httpClient = &http.Client{
 
 func main() {
 	startTime := time.Now()
-	golog.SetTimeFormat("")
-	golog.Print(Banner, version)
-	// gologger.Print().Msgf("%s %s\n\n", Banner, version)
+
+	if !cfg.Silent {
+		gologger.Print().Msgf("%s %s", Banner, version)
+	}
 
 	// Create a context with cancellation ability
 	ctx, cancel := context.WithCancel(context.Background())
@@ -229,8 +231,8 @@ func main() {
 	go func() {
 		select {
 		case sig := <-signalCh:
-			golog.Info("Caught keyboard: ", sig, "(Ctrl-C)")
-			// gologger.Info().Msgf("Caught keyboard: %v (Ctrl-C)", sig)
+			// golog.Info("Caught keyboard: ", sig, "(Ctrl-C)")
+			gologger.Info().Msgf("Caught keyboard: %v (Ctrl-C)", sig)
 			cancel()
 		case <-ctx.Done():
 			// Context canceled, no need To handle signals
@@ -238,38 +240,38 @@ func main() {
 	}()
 
 	if cfg.HttpMethod == "" {
-		golog.Info("HTTP Method : ", Yellow + "[GET]" + Reset)
-		// gologger.Info().Msgf(Yellow + "HTTP Method [GET]" + Reset)
+		// golog.Info("HTTP Method : ", Yellow+"[GET]"+Reset)
+		gologger.Info().Msgf("HTTP Method : %s[GET]%s", Yellow, Reset)
 	} else {
-		golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
-		// gologger.Info().Msgf(Yellow+"HTTP Method [%s]"+Reset, strings.ToUpper(cfg.HttpMethod))
+		// golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
+		gologger.Info().Msgf("HTTP Method : cl%s[%s]%s", Yellow, strings.ToUpper(cfg.HttpMethod), Reset)
 	}
-	if !cfg.Verbose {
-		golog.Info("Match Response Status : ", Yellow + "[200]" + Reset)
-		// gologger.Info().Msgf(Yellow + "Match Response Status [200]" + Reset)
+	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
+		// golog.Info("Match Status Code : ", Yellow+"[200-299,301,302,307,401,403,405,500]"+Reset)
+		gologger.Info().Msgf("Match Status Code : %s[200-299,301,302,307,401,403,405,500]%s", Yellow, Reset)
+	} else if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) > 0 {
+		gologger.Info().Msgf("Match Status Code : %s[200-299]%s", Yellow, Reset)
 	} else {
-		golog.Info("Match Response Status : ", Yellow + "[200-299,300-399,400-499,500-599]" + Reset)
-		// gologger.Info().Msgf(Yellow + "Match Response Status [200-299,300-399,400-499,500-599]" + Reset)
+		// golog.Info("Match Status Code : ", Yellow, cfg.MatchStatus, Reset)
+		gologger.Info().Msgf("Match Status Code : %s%v%s", Yellow, cfg.MatchStatus, Reset)
 	}
 	if len(cfg.MatchStrings) > 0 {
-		golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
-		// gologger.Info().Msgf("Match Title : "+Yellow+"Enable %v"+Reset, cfg.MatchStrings)
-	} // else {
-	// 	golog.Info(Yellow + "Running In Defaul Mode" + Reset)
-	// 	// gologger.Info().Msgf(Yellow + "Running In Defaul Mode" + Reset)
-	// }
+		// golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
+		gologger.Info().Msgf("Match Title : %sEnable %v%s", Yellow, cfg.MatchStrings, Reset)
+	}
 	if cfg.WebCache {
-		golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
+		// golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
+		gologger.Info().Msgf("Detect Web Cache : %sEnabled%s", Yellow, Reset)
 	}
 
 	if cfg.WordlistFile == "" || (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
-		golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
-		// gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+		// golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+		gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
 	}
 
 	if !strings.HasSuffix(cfg.WordlistFile, ".txt") || (!strings.HasSuffix(cfg.UrlFile, ".txt") && len(cfg.UrlString) == 0) {
-		golog.Fatal(Red + "Wordlist and target files must have .txt extension." + Reset)
-		// gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
+		// golog.Fatal(Red + "Wordlist and target files must have .txt extension." + Reset)
+		gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
 	}
 
 	if !cfg.FollowRedirect {
@@ -277,15 +279,15 @@ func main() {
 	}
 
 	if cfg.Concurrency == 0 {
-		golog.Fatal(Red, "-c Can't Be 0", Reset)
-		// gologger.Fatal().Msgf("%s-c Can't Be 0%s", Red, Reset)
+		// golog.Fatal(Red, "-c Can't Be 0", Reset)
+		gologger.Fatal().Msgf("%s-c Can't Be 0%s", Red, Reset)
 	}
 
 	// Read words from a wordlist file
 	words, err := readLines(cfg.WordlistFile)
 	if err != nil {
-		golog.Fatal("Error reading wordlist:", err)
-		// gologger.Fatal().Msgf("Error reading wordlist:", err)
+		// golog.Fatal("Error reading wordlist:", err)
+		gologger.Fatal().Msgf("Error reading wordlist:", err)
 		return
 	}
 
@@ -293,8 +295,8 @@ func main() {
 	if cfg.UrlFile != "" {
 		urls, err = readLines(cfg.UrlFile)
 		if err != nil {
-			golog.Fatal("Error reading URLs: ", err)
-			// gologger.Fatal().Msgf("Error reading URLs:", err)
+			// golog.Fatal("Error reading URLs: ", err)
+			gologger.Fatal().Msgf("Error reading URLs:", err)
 			return
 		}
 	} else if len(cfg.UrlString) > 0 {
@@ -304,8 +306,8 @@ func main() {
 	if cfg.OutputFile != "" {
 		cfg.SuccessFile, err = os.Create(cfg.OutputFile)
 		if err != nil {
-			golog.Fatal("Error creating success file: ", err)
-			// gologger.Fatal().Msgf("Error creating success file: %v\n", err)
+			// golog.Fatal("Error creating success file: ", err)
+			gologger.Fatal().Msgf("Error creating success file: %v\n", err)
 		}
 		defer cfg.SuccessFile.Close()
 	}
@@ -313,8 +315,8 @@ func main() {
 	if cfg.WebCache {
 		cfg.Cachefile, err = os.OpenFile("discoveredWebCache.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
-			golog.Fatal("Error opening log file: ", err)
-			// gologger.Fatal().Msgf("Error opening log file: %s", err)
+			// golog.Fatal("Error opening log file: ", err)
+			gologger.Fatal().Msgf("Error opening WebCache file: %s", err)
 		}
 		defer cfg.Cachefile.Close()
 	}
@@ -348,8 +350,8 @@ func main() {
 	}
 
 	elapsedTime := time.Since(startTime)
-	golog.Info("Total time taken: ", elapsedTime)
-	// gologger.Info().Msgf("Total time taken: %s\n", elapsedTime)
+	// golog.Info("Total time taken: ", elapsedTime)
+	gologger.Info().Msgf("Total time taken: %s\n", elapsedTime)
 }
 
 func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg config) {
@@ -362,8 +364,8 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 
 	urls, err := neturl.Parse(url)
 	if err != nil {
-		golog.Error(Red, "Invalid URL: ", url, Reset)
-		// gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
+		// golog.Error(Red, "Invalid URL: ", url, Reset)
+		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
 		return
 	}
 	if urls.Scheme == "" {
@@ -456,8 +458,9 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	}
 
 	var result Result
-	result.Status = resp.StatusCode
+	result.StatusCode = resp.StatusCode
 	result.ContentLength = resp.ContentLength
+	result.Status = resp.Status
 	result.URL = fullURL
 
 	if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
@@ -475,8 +478,8 @@ func detectWebCache(key, fullURL string) bool {
 			// Save the URL To the success file
 			_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
 			if err != nil {
-				golog.Fatal("Error writing To WebCache file: ", err)
-				// gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+				// golog.Fatal("Error writing To WebCache file: ", err)
+				gologger.Fatal().Msgf("Error writing To WebCache file: %v\n", err)
 			}
 			return true
 		}
@@ -484,46 +487,55 @@ func detectWebCache(key, fullURL string) bool {
 	return false
 }
 
+func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
+	if (sCode >= 200 && sCode <= 299) || sCode == 301 || sCode == 302 || sCode == 307 || sCode == 401 || sCode == 403 || sCode == 405 || sCode == 500 {
+		gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+		if cfg.SuccessFile != nil {
+			// Save the URL To the success file
+			_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
+			if err != nil {
+				gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+			}
+		}
+	} else if len(cfg.MatchStatus) > 0 {
+		if strings.Contains(statusStr, mSCodes) {
+			gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+			// Save the URL To the success file
+			if cfg.SuccessFile != nil {
+				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
+				if err != nil {
+					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+				}
+			}
+		}
+	}
+}
+
 // processResult handles the result of an HTTP request
 func processResult(result Result, cfg config) {
-	if result.Status == http.StatusOK && cfg.SuccessFile != nil {
-		// Save the URL To the success file
-		_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", result.URL)
-		if err != nil {
-			golog.Fatal("Error writing To success file: ", err)
-			// gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+	var mS string
+	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
+		mStatus(result.StatusCode, result.ContentLength, result.URL, result.Status, mS)
+	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) == 0 {
+		mSCode := cfg.MatchStatus
+		for _, mSCodes := range mSCode {
+			if strings.Contains(result.Status, mSCodes) {
+				mStatus(result.StatusCode, result.ContentLength, result.URL, result.Status, mSCodes)
+			}
 		}
-		golog.Info("[", Cyan, result.Status, Reset, "]", " ", result.URL, " ", "[", result.ContentLength, "]", " ", (Green + "[Found]" + Reset))
-		// gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
-	} else if result.Status != http.StatusOK && cfg.SuccessFile != nil && !result.Match && cfg.Verbose {
-		verboseMode(cfg.Verbose, result.Status, result.URL, result.ContentLength)
-	} else if len(cfg.MatchStrings) > 0 {
+	} else if len(cfg.MatchStrings) > 0 && len(cfg.MatchStatus) == 0 {
 		if result.Match {
+			gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", result.URL, Cyan, result.ContentLength, result.Status, Reset)
+			// Save the URL To the success file
 			if cfg.SuccessFile != nil {
-				// Save the URL To the success file
 				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", result.URL)
 				if err != nil {
-					golog.Fatal("Error writing To success file: ", err)
-					// gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
 				}
-				golog.Info("[", Cyan, result.Status, Reset, "]", " ", result.URL, " ", "[", result.ContentLength, "]", " ", (Green + "[Found]" + Reset))
-				// gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
-			} else {
-				golog.Info("[", Cyan, result.Status, Reset, "]", " ", result.URL, " ", "[", result.ContentLength, "]", " ", (Green + "[Found]" + Reset))
-				// gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
-			}
-		} else {
-			if cfg.SuccessFile != nil {
-				verboseMode(cfg.Verbose, result.Status, result.URL, result.ContentLength)
-			} else {
-				verboseMode(cfg.Verbose, result.Status, result.URL, result.ContentLength)
 			}
 		}
-	} else if result.Status == http.StatusOK && len(cfg.MatchStrings) == 0 && cfg.SuccessFile == nil {
-		golog.Info("[", Cyan, result.Status, Reset, "]", " ", result.URL, " ", "[", result.ContentLength, "]", " ", (Green + "[Found]" + Reset))
-		// gologger.Info().Msgf("[%s%d%s] %s [%d] %s", Cyan, result.Status, Reset, result.URL, result.ContentLength, (Green + "[Found]" + Reset))
-	} else if result.Status != http.StatusOK && len(cfg.MatchStrings) == 0 && cfg.SuccessFile == nil && cfg.Verbose {
-		verboseMode(cfg.Verbose, result.Status, result.URL, result.ContentLength)
+	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) > 0 {
+		gologger.Fatal().Msgf("Can't run -mc and -ms together")
 	}
 }
 
@@ -565,8 +577,8 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	bodyReader.Close()
 
 	if err != nil {
-		golog.Error((Yellow + "Error reading response body: " + Reset), err)
-		// gologger.Error().Msgf(Yellow+"Error reading response body: %v"+Reset, err)
+		// golog.Error((Yellow + "Error reading response body: " + Reset), err)
+		gologger.Error().Msgf(Yellow+"Error reading response body: %v"+Reset, err)
 		return nil, err
 	}
 
@@ -609,52 +621,9 @@ func detectBodyMatch(fullURL string, resp *http.Response) bool {
 	}
 }
 
-func verboseMode(Verbose bool, sCode int, fUrl string, cLen int64) {
-	if Verbose {
-		if sCode == 404 {
-			// gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Not Found]" + Reset))
-			golog.Error("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Not Found]" + Reset))
-		} else if sCode == 401 {
-			golog.Error("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Unauthorized]" + Reset))
-			// gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Unauthorized]" + Reset))
-		} else if sCode == 400 {
-			golog.Error("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Bad Request]" + Reset))
-			// gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Bad Request]" + Reset))
-		} else if sCode == 403 {
-			golog.Error("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Forbidden]" + Reset))
-			// gologger.Error().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Forbidden]" + Reset))
-		} else if sCode == 405 {
-			golog.Error("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Method Not Allowed]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Method Not Allowed]" + Reset))
-		} else if sCode == 429 {
-			golog.Warn("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Rate Limited]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Rate Limited]" + Reset))
-		} else if sCode == 301 {
-			golog.Warn("[", Yellow, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Yellow + "[Moved Permanently]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Moved Permanently]" + Reset))
-		} else if sCode == 302 {
-			golog.Warn("[", Yellow, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Yellow + "[Redirect Found]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Redirect Found]" + Reset))
-		} else if sCode == 307 {
-			golog.Warn("[", Yellow, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Yellow + "[Temporary Redirect]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Yellow, sCode, Reset, fUrl, cLen, (Yellow + "[Temporary Redirect]" + Reset))
-		} else if sCode == 500 {
-			golog.Warn("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Internal Server Error]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Internal Server Error]" + Reset))
-		} else if sCode == 503 {
-			golog.Warn("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]", " ", (Red + "[Service Unavailable]" + Reset))
-			// gologger.Warning().Msgf("[%s%d%s] %s [%d] %s", Red, sCode, Reset, fUrl, cLen, (Red + "[Service Unavailable]" + Reset))
-		} else {
-			golog.Warn("[", Red, sCode, Reset, "]", " ", fUrl, " ", "[", cLen, "]")
-			// gologger.Info().Msgf("[%s%d%s] %s [%d]", Red, sCode, Reset, fUrl, cLen)
-		}
-	}
-}
-
 func debugModeEr(debug bool, urlStr string, message error) {
 	if debug {
-		golog.Error("Error making GET request To ", urlStr, " : ", message)
-		// gologger.Error().Msgf("Error making GET request To %s: %v", urlStr, message)
+		gologger.Error().Msgf("Error making GET request To %s: %v", urlStr, message)
 	}
 }
 

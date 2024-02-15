@@ -5,13 +5,13 @@ qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.1.3
+go install github.com/SpeedyQweku/qfuzz@v0.1.4
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.1.3
+qfuzz, fuzz, and more - v0.1.4
 
 INPUT:
    -wordlist, -w string  Wordlist file path
@@ -23,6 +23,7 @@ OUTPUT:
 
 MATCHERS:
    -match-strings, -ms string[]  match response with specified string/strings (-mt example,Fuzz)
+   -mc string[]                  Match HTTP status codes, (default 200-299,301,302,307,401,403,405,500)
 
 CONFIGURATIONS:
    -X string               HTTP method To use in the request, (e.g., GET, POST, PUT, DELETE)
@@ -39,8 +40,8 @@ OPTIMIZATIONS:
    -timeout, -to int  timeout (seconds) (default 10)
 
 DEBUG:
-   -v, -verbose  Verbose mode
-   -debug        Debug mode (default true)
+   -silent  Silent mode
+   -debug   Debug mode
 ```
 
 ### GET fuzzing
