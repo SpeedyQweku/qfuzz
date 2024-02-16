@@ -5,13 +5,13 @@ qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.1.4
+go install github.com/SpeedyQweku/qfuzz@v0.1.5
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.1.4
+qfuzz, fuzz, and more - v0.1.5
 
 INPUT:
    -wordlist, -w string  Wordlist file path
@@ -22,8 +22,8 @@ OUTPUT:
    -output, -o string  Output file path
 
 MATCHERS:
-   -match-strings, -ms string[]  match response with specified string/strings (-mt example,Fuzz)
-   -mc string[]                  Match HTTP status codes, (default 200-299,301,302,307,401,403,405,500)
+   -mc string[]  Match HTTP status codes, (default 200-299,301,302,307,401,403,405,500)
+   -ms string[]  Match response body with specified string/strings (-ms example,Fuzz)
 
 CONFIGURATIONS:
    -X string               HTTP method To use in the request, (e.g., GET, POST, PUT, DELETE)
@@ -31,7 +31,7 @@ CONFIGURATIONS:
    -H string[]             Headers To include in the request, (e.g., 'key1:value1,key2:value2')
    -follow-redirects, -fr  Follow redirects
    -webcache               Detect web caching, (discoveredWebCache.txt)
-   -random-agent           Enable Random User-Agent To use (default true)
+   -ra, -random-agent      Enable Random User-Agent To use
    -retries int            number of Retries, if status code is 429 (default 5)
    -http2                  use HTTP2 protocol
 

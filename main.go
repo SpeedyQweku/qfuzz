@@ -39,7 +39,7 @@ var (
 	}
 )
 
-var version = "v0.1.4"
+var version = "v0.1.5"
 
 const (
 	Reset  = "\033[0m"
@@ -61,17 +61,19 @@ const (
 
 // Result struct To represent the result of an HTTP request
 type Result struct {
-	StatusCode    int
-	Status        string
-	ContentLength int64
-	URL           string
-	Match         bool
+	StatusCode  int
+	Status      string
+	ContentSize int64
+	URL         string
+	Match       bool
 }
 
 type config struct {
 	OutputFile      string
 	WordlistFile    string
 	UrlFile         string
+	PostData        string
+	HttpMethod      string
 	UserAgents      []string
 	FollowRedirect  bool
 	Silent          bool
@@ -88,8 +90,6 @@ type config struct {
 	Headers         goflags.StringSlice
 	MatchStrings    goflags.StringSlice
 	MatchStatus     goflags.StringSlice
-	PostData        string
-	HttpMethod      string
 }
 
 var cfg config
@@ -106,8 +106,8 @@ func init() {
 		flagSet.StringVarP(&cfg.OutputFile, "o", "output", "", "Output file path"),
 	)
 	flagSet.CreateGroup("matchers", "MATCHERS",
-		flagSet.StringSliceVarP(&cfg.MatchStrings, "ms", "match-strings", nil, "match response with specified string/strings (-mt example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 		flagSet.StringSliceVar(&cfg.MatchStatus, "mc", nil, "Match HTTP status codes, (default 200-299,301,302,307,401,403,405,500)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.StringSliceVar(&cfg.MatchStrings, "ms", nil, "Match response body with specified string/strings (-ms example,Fuzz)", goflags.CommaSeparatedStringSliceOptions),
 	)
 	flagSet.CreateGroup("configurations", "CONFIGURATIONS",
 		flagSet.StringVar(&cfg.HttpMethod, "X", "", "HTTP method To use in the request, (e.g., GET, POST, PUT, DELETE)"),
@@ -115,7 +115,7 @@ func init() {
 		flagSet.StringSliceVar(&cfg.Headers, "H", nil, "Headers To include in the request, (e.g., 'key1:value1,key2:value2')", goflags.CommaSeparatedStringSliceOptions),
 		flagSet.BoolVarP(&cfg.FollowRedirect, "fr", "follow-redirects", false, "Follow redirects"),
 		flagSet.BoolVar(&cfg.WebCache, "webcache", false, "Detect web caching, (discoveredWebCache.txt)"),
-		flagSet.BoolVar(&cfg.RandomUserAgent, "random-agent", true, "Enable Random User-Agent To use"),
+		flagSet.BoolVarP(&cfg.RandomUserAgent, "random-agent", "ra", false, "Enable Random User-Agent To use"),
 		flagSet.IntVar(&cfg.Retries, "retries", 5, "number of Retries, if status code is 429"),
 		flagSet.BoolVar(&cfg.Http2, "http2", false, "use HTTP2 protocol"),
 	)
@@ -250,14 +250,14 @@ func main() {
 		// golog.Info("Match Status Code : ", Yellow+"[200-299,301,302,307,401,403,405,500]"+Reset)
 		gologger.Info().Msgf("Match Status Code : %s[200-299,301,302,307,401,403,405,500]%s", Yellow, Reset)
 	} else if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) > 0 {
-		gologger.Info().Msgf("Match Status Code : %s[200-299]%s", Yellow, Reset)
+		gologger.Info().Msgf("Match Status Code : %s[200]%s", Yellow, Reset)
 	} else {
 		// golog.Info("Match Status Code : ", Yellow, cfg.MatchStatus, Reset)
 		gologger.Info().Msgf("Match Status Code : %s%v%s", Yellow, cfg.MatchStatus, Reset)
 	}
 	if len(cfg.MatchStrings) > 0 {
 		// golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
-		gologger.Info().Msgf("Match Title : %sEnable %v%s", Yellow, cfg.MatchStrings, Reset)
+		gologger.Info().Msgf("Match Strings : %sEnable %v%s", Yellow, cfg.MatchStrings, Reset)
 	}
 	if cfg.WebCache {
 		// golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
@@ -459,9 +459,25 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 
 	var result Result
 	result.StatusCode = resp.StatusCode
-	result.ContentLength = resp.ContentLength
 	result.Status = resp.Status
 	result.URL = fullURL
+	// result.ContentLength = resp.ContentLength
+	if resp.ContentLength != -1 {
+		result.ContentSize = resp.ContentLength
+	} else {
+		// If Content-Length is not set or is -1, read the response body to determine size
+		buffer := make([]byte, 10000)
+		for {
+			n, err := resp.Body.Read(buffer)
+			result.ContentSize = int64(n)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				result.ContentSize = resp.ContentLength
+			}
+		}
+	}
 
 	if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
 		result.Match = detectBodyMatch(fullURL, resp)
@@ -489,7 +505,7 @@ func detectWebCache(key, fullURL string) bool {
 
 func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
 	if (sCode >= 200 && sCode <= 299) || sCode == 301 || sCode == 302 || sCode == 307 || sCode == 401 || sCode == 403 || sCode == 405 || sCode == 500 {
-		gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+		gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
 		if cfg.SuccessFile != nil {
 			// Save the URL To the success file
 			_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
@@ -499,7 +515,7 @@ func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
 		}
 	} else if len(cfg.MatchStatus) > 0 {
 		if strings.Contains(statusStr, mSCodes) {
-			gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+			gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
 			// Save the URL To the success file
 			if cfg.SuccessFile != nil {
 				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
@@ -515,17 +531,17 @@ func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
 func processResult(result Result, cfg config) {
 	var mS string
 	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
-		mStatus(result.StatusCode, result.ContentLength, result.URL, result.Status, mS)
+		mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mS)
 	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) == 0 {
 		mSCode := cfg.MatchStatus
 		for _, mSCodes := range mSCode {
 			if strings.Contains(result.Status, mSCodes) {
-				mStatus(result.StatusCode, result.ContentLength, result.URL, result.Status, mSCodes)
+				mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mSCodes)
 			}
 		}
 	} else if len(cfg.MatchStrings) > 0 && len(cfg.MatchStatus) == 0 {
 		if result.Match {
-			gologger.Print().Msgf("%s %s[ContentLength: %d, Status: %v]%s", result.URL, Cyan, result.ContentLength, result.Status, Reset)
+			gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", result.URL, Cyan, result.ContentSize, result.Status, Reset)
 			// Save the URL To the success file
 			if cfg.SuccessFile != nil {
 				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", result.URL)
@@ -535,7 +551,7 @@ func processResult(result Result, cfg config) {
 			}
 		}
 	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) > 0 {
-		gologger.Fatal().Msgf("Can't run -mc and -ms together")
+		gologger.Fatal().Msgf("Can't run -mc and -ms/-mt together")
 	}
 }
 
@@ -569,12 +585,12 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	// Create a new io.Reader from the response body
 	bodyReader := resp.Body
 
+	// Close the response body
+	defer bodyReader.Close()
+
 	// Read the response body into a buffer
 	var bodyBuffer bytes.Buffer
 	_, err := io.Copy(&bodyBuffer, bodyReader)
-
-	// Close the response body
-	bodyReader.Close()
 
 	if err != nil {
 		// golog.Error((Yellow + "Error reading response body: " + Reset), err)
@@ -585,12 +601,12 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	return bodyBuffer.Bytes(), nil
 }
 
-func matchRespString(body []byte, titles []string) bool {
-	if len(titles) == 0 {
+func matchRespData(body []byte, raw []string) bool {
+	if len(raw) == 0 {
 		return false
 	}
-	for _, title := range titles {
-		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(title)) {
+	for _, data := range raw {
+		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(data)) {
 			return true
 		}
 	}
@@ -614,7 +630,7 @@ func detectBodyMatch(fullURL string, resp *http.Response) bool {
 	title := bodyTitle.Find("title").Text()
 	responseText := bodyTitle.Text()
 
-	if matchRespString([]byte(responseText), cfg.MatchStrings) || matchRespString([]byte(title), cfg.MatchStrings) {
+	if matchRespData([]byte(responseText), cfg.MatchStrings) || matchRespData([]byte(title), cfg.MatchStrings) {
 		return true
 	} else {
 		return false
