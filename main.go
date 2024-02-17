@@ -287,7 +287,7 @@ func main() {
 	words, err := readLines(cfg.WordlistFile)
 	if err != nil {
 		// golog.Fatal("Error reading wordlist:", err)
-		gologger.Fatal().Msgf("Error reading wordlist:", err)
+		gologger.Fatal().Msgf("Error reading wordlist: %v\n", err)
 		return
 	}
 
@@ -296,7 +296,7 @@ func main() {
 		urls, err = readLines(cfg.UrlFile)
 		if err != nil {
 			// golog.Fatal("Error reading URLs: ", err)
-			gologger.Fatal().Msgf("Error reading URLs:", err)
+			gologger.Fatal().Msgf("Error reading URLs: %v\n", err)
 			return
 		}
 	} else if len(cfg.UrlString) > 0 {
@@ -364,7 +364,6 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 
 	urls, err := neturl.Parse(url)
 	if err != nil {
-		// golog.Error(Red, "Invalid URL: ", url, Reset)
 		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
 		return
 	}
@@ -581,7 +580,7 @@ func rateLimit(fullURL string, sCode int, request *http.Request) {
 	}
 }
 
-func readResponseBody(resp *http.Response) ([]byte, error) {
+func readResponseBody(resp *http.Response, fullUrl string) ([]byte, error) {
 	// Create a new io.Reader from the response body
 	bodyReader := resp.Body
 
@@ -593,8 +592,7 @@ func readResponseBody(resp *http.Response) ([]byte, error) {
 	_, err := io.Copy(&bodyBuffer, bodyReader)
 
 	if err != nil {
-		// golog.Error((Yellow + "Error reading response body: " + Reset), err)
-		gologger.Error().Msgf(Yellow+"Error reading response body: %v"+Reset, err)
+		debugModeEr(cfg.Debug, fullUrl, err)
 		return nil, err
 	}
 
@@ -614,7 +612,7 @@ func matchRespData(body []byte, raw []string) bool {
 }
 
 func detectBodyMatch(fullURL string, resp *http.Response) bool {
-	body, err := readResponseBody(resp)
+	body, err := readResponseBody(resp, fullURL)
 	if err != nil {
 		debugModeEr(cfg.Debug, fullURL, err)
 		return false
@@ -639,7 +637,7 @@ func detectBodyMatch(fullURL string, resp *http.Response) bool {
 
 func debugModeEr(debug bool, urlStr string, message error) {
 	if debug {
-		gologger.Error().Msgf("Error making GET request To %s: %v", urlStr, message)
+		gologger.Error().Msgf("Error %s: %v", urlStr, message)
 	}
 }
 
