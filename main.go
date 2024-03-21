@@ -42,7 +42,7 @@ var (
 	}
 )
 
-var version = "v0.2.1"
+var version = "v0.2.2"
 
 const (
 	Reset  = "\033[0m"
@@ -457,8 +457,8 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 
 	if cfg.WebCache {
 		// gologger.Info().Msg("Web Cache")
-		for key := range resp.Header {
-			if detectWebCache(key, fullURL) {
+		for key, val := range resp.Header {
+			if detectWebCache(key, val, fullURL) {
 				break
 			}
 		}
@@ -498,17 +498,24 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	processResult(result, cfg)
 }
 
-func detectWebCache(key, fullURL string) bool {
-	var cacheHeaders = []string{"X-Cache", "Cache-Control", "Vary", "Age", "Server-Timing"}
+func detectWebCache(key string, vals []string, fullURL string) bool {
+	var cacheHeaders = []string{"X-Cache", "Cf-Cache-Status", "Cache-Control", "Vary", "Age", "Server-Timing"}
 	for _, header := range cacheHeaders {
 		if strings.EqualFold(key, header) {
-			// Save the URL To the success file
-			_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
-			if err != nil {
-				// golog.Fatal("Error writing To WebCache file: ", err)
-				gologger.Fatal().Msgf("Error writing To WebCache file: %v\n", err)
+			if key == "X-Cache" || key == "Cf-Cache-Status" {
+				for _, val := range vals {
+					if strings.Contains(strings.ToLower(val), "hit") || strings.Contains(strings.ToLower(val), "miss") {
+					// if strings.ToLower(val) == "hit" || strings.ToLower(val) == "miss" {
+						// Save the URL To the success file
+						_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
+						if err != nil {
+							// golog.Fatal("Error writing To WebCache file: ", err)
+							gologger.Fatal().Msgf("Error writing To WebCache file: %v\n", err)
+						}
+						return true
+					}
+				}
 			}
-			return true
 		}
 	}
 	return false
@@ -610,7 +617,6 @@ func readResponseBody(resp *http.Response, fullUrl string) ([]byte, error) {
 
 	return bodyBuffer.Bytes(), nil
 }
-
 
 func chMSForNU(numbers []interface{}) bool {
 	for _, num := range numbers {
