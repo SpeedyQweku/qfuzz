@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	// "reflect"
+	"strconv"
 
 	"context"
 	"math/rand"
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
 	// "net"
 	// "crypto/tls"
 
@@ -39,7 +42,7 @@ var (
 	}
 )
 
-var version = "v0.2.0"
+var version = "v0.2.1"
 
 const (
 	Reset  = "\033[0m"
@@ -244,8 +247,17 @@ func main() {
 		gologger.Info().Msgf("HTTP Method : %s[GET]%s", Yellow, Reset)
 	} else {
 		// golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
-		gologger.Info().Msgf("HTTP Method : cl%s[%s]%s", Yellow, strings.ToUpper(cfg.HttpMethod), Reset)
+		gologger.Info().Msgf("HTTP Method : %s[%s]%s", Yellow, strings.ToUpper(cfg.HttpMethod), Reset)
 	}
+
+	var matchStatusList []interface{}
+	for _, status := range cfg.MatchStatus {
+		matchStatusList = append(matchStatusList, status)
+	}
+	if !chMSForNU(matchStatusList) {
+		gologger.Fatal().Msg("Match Status Must Be Numbers")
+	}
+
 	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
 		// golog.Info("Match Status Code : ", Yellow+"[200-299,301,302,307,401,403,405,500]"+Reset)
 		gologger.Info().Msgf("Match Status Code : %s[200-299,301,302,307,401,403,405,500]%s", Yellow, Reset)
@@ -597,6 +609,27 @@ func readResponseBody(resp *http.Response, fullUrl string) ([]byte, error) {
 	}
 
 	return bodyBuffer.Bytes(), nil
+}
+
+
+func chMSForNU(numbers []interface{}) bool {
+	for _, num := range numbers {
+		// Type assertion to convert interface{} to string
+		strNum, ok := num.(string)
+		if !ok {
+			// If the type assertion fails, it's not a string
+			return false
+		}
+
+		_, err := strconv.Atoi(strNum)
+		if err != nil {
+			// If an error occurs during conversion, it's not a number
+			return false
+		}
+	}
+
+	// If all elements passed the checks, it contains only numbers
+	return true
 }
 
 func matchRespData(body []byte, raw []string) bool {
