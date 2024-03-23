@@ -5,13 +5,13 @@ qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.2.2
+go install github.com/SpeedyQweku/qfuzz@v0.2.3
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.2.2
+qfuzz, fuzz, and more - v0.2.3
 
 INPUT:
    -wordlist, -w string  Wordlist file path
