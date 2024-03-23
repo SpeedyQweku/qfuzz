@@ -276,14 +276,28 @@ func main() {
 		gologger.Info().Msgf("Detect Web Cache : %sEnabled%s", Yellow, Reset)
 	}
 
-	if cfg.WordlistFile == "" || (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
-		// golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
-		gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+	if !cfg.WebCache {
+		if cfg.WordlistFile == "" || (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
+			// golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+			gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+		}
+	} else {
+		if cfg.UrlFile == "" && len(cfg.UrlString) == 0 {
+			// golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+			gologger.Fatal().Msgf(Red + "Please specify target using -l or -u" + Reset)
+		}
 	}
 
-	if !strings.HasSuffix(cfg.WordlistFile, ".txt") || (!strings.HasSuffix(cfg.UrlFile, ".txt") && len(cfg.UrlString) == 0) {
-		// golog.Fatal(Red + "Wordlist and target files must have .txt extension." + Reset)
-		gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
+	if !cfg.WebCache {
+		if !strings.HasSuffix(cfg.WordlistFile, ".txt") || (!strings.HasSuffix(cfg.UrlFile, ".txt") && len(cfg.UrlString) == 0) {
+			// golog.Fatal(Red + "Wordlist and target files must have .txt extension." + Reset)
+			gologger.Fatal().Msgf(Red + "Wordlist and target files must have .txt extension." + Reset)
+		}
+	} else {
+		if !strings.HasSuffix(cfg.UrlFile, ".txt") && len(cfg.UrlString) == 0 {
+			// golog.Fatal(Red + "Wordlist and target files must have .txt extension." + Reset)
+			gologger.Fatal().Msgf(Red + "Target file must have .txt extension." + Reset)
+		}
 	}
 
 	if !cfg.FollowRedirect {
@@ -295,15 +309,20 @@ func main() {
 		gologger.Fatal().Msgf("%s-c Can't Be 0%s", Red, Reset)
 	}
 
-	// Read words from a wordlist file
-	words, err := readLines(cfg.WordlistFile)
-	if err != nil {
-		// golog.Fatal("Error reading wordlist:", err)
-		gologger.Fatal().Msgf("Error reading wordlist: %v\n", err)
-		return
+	var err error
+	var words []string
+	var urls []string
+
+	if cfg.WordlistFile != "" {
+		// Read words from a wordlist file
+		words, err = readLines(cfg.WordlistFile)
+		if err != nil {
+			// golog.Fatal("Error reading wordlist:", err)
+			gologger.Fatal().Msgf("Error reading wordlist: %v\n", err)
+			return
+		}
 	}
 
-	var urls []string
 	if cfg.UrlFile != "" {
 		urls, err = readLines(cfg.UrlFile)
 		if err != nil {
@@ -339,11 +358,19 @@ func main() {
 	// Create a semaphore To limit concurrency
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
-	for _, word := range words {
+	if cfg.WebCache && cfg.WordlistFile == "" {
 		for _, url := range urls {
 			wg.Add(1)               // Increment the wait group counter
 			semaphore <- struct{}{} // acquire semaphore
-			go makeRequest(url, word, &wg, semaphore, ctx, cfg)
+			go webCacheRequest(url, &wg, semaphore, ctx, cfg)
+		}
+	} else {
+		for _, word := range words {
+			for _, url := range urls {
+				wg.Add(1)               // Increment the wait group counter
+				semaphore <- struct{}{} // acquire semaphore
+				go makeRequest(url, word, &wg, semaphore, ctx, cfg)
+			}
 		}
 	}
 
@@ -498,6 +525,129 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	processResult(result, cfg)
 }
 
+func webCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg config) {
+	defer func() {
+		<-semaphore // release semaphore
+		wg.Done()
+	}()
+
+	var fullURL string
+
+	urls, err := neturl.Parse(url)
+	if err != nil {
+		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
+		return
+	}
+	if urls.Scheme == "" {
+		urls.Scheme = "https"
+	}
+
+	fullURL = urls.String()
+
+	// Reuse http.Request and http.Response using sync.Pool
+	request := acquireRequest()
+	defer releaseRequest(request)
+	request.URL, _ = neturl.Parse(fullURL)
+
+	// Set the HTTP method
+	if cfg.HttpMethod != "" {
+		request.Method = strings.ToUpper(cfg.HttpMethod)
+	} else {
+		request.Method = "GET"
+	}
+
+	// Set User-Agent in the request header
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+
+	if len(cfg.Headers) > 0 {
+		for _, pair := range cfg.Headers {
+			result := strings.Split(pair, ":")
+			key, value := result[0], result[1]
+			request.Header.Set(key, value)
+		}
+		// Check if "User-Agent" header is present, and if not, add it
+		if _, exists := request.Header["User-Agent"]; !exists {
+			request.Header.Set("User-Agent", getRandomUserAgent())
+		}
+	} else if len(cfg.Headers) == 0 && cfg.RandomUserAgent {
+		request.Header.Set("User-Agent", getRandomUserAgent())
+	}
+
+	// If it's a POST request and data is provided, include data in the request body
+	if request.Method == "POST" && cfg.PostData != "" {
+		request.Body = ioutil.NopCloser(strings.NewReader(cfg.PostData))
+		request.GetBody = func() (io.ReadCloser, error) {
+			return ioutil.NopCloser(strings.NewReader(cfg.PostData)), nil
+		}
+		// Check if "Content-Type" header is present, and if not, add it
+		if _, exists := request.Header["Content-Type"]; !exists {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
+
+	response := acquireResponse()
+	defer releaseResponse(response)
+
+	// Optionally wait for a user interrupt To exit gracefully
+	select {
+	case <-ctx.Done():
+		// Context canceled, exit gracefully
+		return
+	default:
+	}
+
+	// Make the HTTP request
+	resp, err := httpClient.Do(request.WithContext(ctx))
+	if err != nil {
+		debugModeEr(cfg.Debug, fullURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if cfg.WebCache {
+		// gologger.Info().Msg("Web Cache")
+		for key, val := range resp.Header {
+			if detectWebCache(key, val, fullURL) {
+				if resp.StatusCode == http.StatusTooManyRequests {
+					rateLimit(fullURL, resp.StatusCode, request)
+				}
+			
+				var result Result
+				result.StatusCode = resp.StatusCode
+				result.Status = resp.Status
+				result.URL = fullURL
+				// result.ContentLength = resp.ContentLength
+				if resp.ContentLength != -1 {
+					result.ContentSize = resp.ContentLength
+				} else {
+					// If Content-Length is not set or is -1, read the response body to determine size
+					buffer := make([]byte, 10000)
+					for {
+						n, err := resp.Body.Read(buffer)
+						result.ContentSize = int64(n)
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							result.ContentSize = resp.ContentLength
+						}
+					}
+				}
+			
+				if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
+					result.Match = detectBodyMatch(fullURL, resp)
+				}
+			
+				// Process the result
+				processResult(result, cfg)
+				break
+			}
+		}
+	}
+}
+
 func detectWebCache(key string, vals []string, fullURL string) bool {
 	var cacheHeaders = []string{"X-Cache", "Cf-Cache-Status", "Cache-Control", "Vary", "Age", "Server-Timing"}
 	for _, header := range cacheHeaders {
@@ -505,7 +655,7 @@ func detectWebCache(key string, vals []string, fullURL string) bool {
 			if key == "X-Cache" || key == "Cf-Cache-Status" {
 				for _, val := range vals {
 					if strings.Contains(strings.ToLower(val), "hit") || strings.Contains(strings.ToLower(val), "miss") {
-					// if strings.ToLower(val) == "hit" || strings.ToLower(val) == "miss" {
+						// if strings.ToLower(val) == "hit" || strings.ToLower(val) == "miss" {
 						// Save the URL To the success file
 						_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
 						if err != nil {
