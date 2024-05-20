@@ -1,6 +1,6 @@
 # qfuzz
 
-qfuzz`(QwekuFuzzer)`, web fuzzer, and more written in Go
+qfuzz`(quickFuzzer)`, web fuzzer, and more written in Go
 
 ## Installation
 
