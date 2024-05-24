@@ -5,13 +5,13 @@ qfuzz`(quickFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.2.3
+go install github.com/SpeedyQweku/qfuzz@v0.2.4
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.2.3
+qfuzz, fuzz, and more - v0.2.4
 
 INPUT:
    -wordlist, -w string  Wordlist file path
@@ -78,4 +78,23 @@ qfuzz -w < wordlist.txt > -l < urls.txt > -ms example,Fuzz
 
 ```bash
 qfuzz -u < URL >,< URL >... -w < wordlist.txt > -ms example,Fuzz
+```
+
+### The FUZZ keyword
+
+By using the `FUZZ` keyword in a POST data
+
+```bash
+qfuzz -X POST -d "username=admin\&password=FUZZ" -w < wordlist.txt > -l < urls.txt >
+```
+
+By using the `FUZZ` keyword in URL(s)
+
+```bash
+qfuzz -u https://target/?FUZZ=value -w < wordlist.txt >
+```
+
+By using the `FUZZ` keyword in Headers
+```bash
+qfuzz -u < URL > -w < wordlist.txt > -H "Content-Type: application/json","Host: FUZZ"
 ```
