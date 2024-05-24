@@ -27,22 +27,8 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/projectdiscovery/goflags"
 	"github.com/projectdiscovery/gologger"
+	"github.com/schollz/progressbar/v3"
 )
-
-var (
-	requestPool = sync.Pool{
-		New: func() interface{} {
-			return new(http.Request)
-		},
-	}
-	responsePool = sync.Pool{
-		New: func() interface{} {
-			return new(http.Response)
-		},
-	}
-)
-
-var version = "v0.2.2"
 
 const (
 	Reset  = "\033[0m"
@@ -62,40 +48,64 @@ const (
 ` + Reset
 )
 
-// Result struct To represent the result of an HTTP request
+// Result represents the result of an HTTP request.
 type Result struct {
-	StatusCode  int
-	Status      string
-	ContentSize int64
-	URL         string
-	Match       bool
+	StatusCode  int    // StatusCode is the HTTP status code returned by the server (e.g., 200, 404).
+	Status      string // Status is the HTTP status message returned by the server (e.g., "200 OK", "404 Not Found").
+	ContentSize int64  // ContentSize is the size of the response content in bytes.
+	URL         string // URL is the URL that was requested.
+	Match       bool   // Match indicates whether the response matched certain criteria (specific strings).
 }
 
-type config struct {
-	OutputFile      string
-	WordlistFile    string
-	UrlFile         string
-	PostData        string
-	HttpMethod      string
-	UserAgents      []string
-	FollowRedirect  bool
-	Silent          bool
-	RandomUserAgent bool
-	Debug           bool
-	Http2           bool
-	WebCache        bool
-	To              int
-	Concurrency     int
-	Retries         int
-	SuccessFile     *os.File
-	Cachefile       *os.File
-	UrlString       goflags.StringSlice
-	Headers         goflags.StringSlice
-	MatchStrings    goflags.StringSlice
-	MatchStatus     goflags.StringSlice
+// Config holds configuration settings for the application.
+type Config struct {
+	OutputFile      string              // OutputFile specifies the path to the file where output will be written.
+	WordlistFile    string              // WordlistFile specifies the path to the file containing a list of words.
+	UrlFile         string              // UrlFile specifies the path to the file containing a list of URLs.
+	PostData        string              // PostData contains the data to be sent in a POST request.
+	HttpMethod      string              // HttpMethod specifies the HTTP method to use (e.g., GET, POST).
+	UserAgents      []string            // UserAgents is a list of user agent strings to use for requests.
+	FollowRedirect  bool                // FollowRedirect indicates whether redirects should be followed.
+	Silent          bool                // Silent controls whether output should be minimized.
+	RandomUserAgent bool                // RandomUserAgent indicates whether a random user agent should be used for each request.
+	Debug           bool                // Debug enables debug mode, providing more detailed logging.
+	Http2           bool                // Http2 enables the use of HTTP/2 for requests.
+	WebCache        bool                // WebCache enables the use of web caching detection.
+	To              int                 // To specifies the timeout for HTTP requests, in seconds.
+	Concurrency     int                 // Concurrency specifies the number of concurrent requests to make.
+	Retries         int                 // Retries specifies the number of times to retry failed requests.
+	SuccessFile     *os.File            // SuccessFile is a file handle to write successful requests to.
+	Cachefile       *os.File            // Cachefile is a file handle to write successful web caching detection.
+	UrlString       goflags.StringSlice // UrlString is a slice of URL strings specified.
+	Headers         goflags.StringSlice // Headers is a slice of HTTP headers specified.
+	MatchStrings    goflags.StringSlice // MatchStrings is a slice of strings to match in responses.
+	MatchStatus     goflags.StringSlice // MatchStatus is a slice of HTTP status codes to match in responses status code.
 }
 
-var cfg config
+// Declare and initialize a sync.Pool for http.Request objects and http.Response objects.
+var (
+	// requestPool is a pool of reusable http.Request objects.
+	requestPool = sync.Pool{
+		// New defines a function that creates a new http.Request object.
+		New: func() interface{} {
+			return new(http.Request)
+		},
+	}
+
+	// responsePool is a pool of reusable http.Response objects.
+	responsePool = sync.Pool{
+		// New defines a function that creates a new http.Response object.
+		New: func() interface{} {
+			return new(http.Response)
+		},
+	}
+)
+
+var (
+	cfg Config
+	mu  sync.Mutex
+	version = "v0.2.4"
+)
 
 func init() {
 	flagSet := goflags.NewFlagSet()
@@ -215,11 +225,586 @@ var httpClient = &http.Client{
 	},
 }
 
-func main() {
-	startTime := time.Now()
+// Select a random User-Agent from the list
+func getRandomUserAgent() string {
+	return cfg.UserAgents[rand.Intn(len(cfg.UserAgents))]
+}
 
-	if !cfg.Silent {
-		gologger.Print().Msgf("%s %s", Banner, version)
+// Helper function to acquire and release request
+func acquireRequest() *http.Request {
+	return requestPool.Get().(*http.Request)
+}
+
+// Helper function to acquire and release request
+func releaseRequest(req *http.Request) {
+	req.URL = nil
+	req.Body = nil
+	req.Header = nil
+	requestPool.Put(req)
+}
+
+// Helper function to acquire and release response
+func acquireResponse() *http.Response {
+	return responsePool.Get().(*http.Response)
+}
+
+// Helper function to acquire and release response
+func releaseResponse(resp *http.Response) {
+	responsePool.Put(resp)
+}
+
+// debugModeEr print out all errors
+func debugModeEr(debug bool, urlStr string, message error) {
+	if debug {
+		gologger.Error().Msgf("Error %s: %v", urlStr, message)
+	}
+}
+
+// Reading A File Line By Line
+func readLines(filename string) ([]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	return lines, scanner.Err()
+}
+
+// check if "FUZZ" is in the headers
+func headerFUZZcheck(headerData []string) bool {
+	for _, item := range headerData {
+		if strings.Contains(item, "FUZZ") {
+			return true
+		}
+	}
+	return false
+}
+
+// processUrls process the urls
+func processUrls(url, word string, cfg Config) string {
+	var fullURL string
+
+	urls, err := neturl.Parse(url)
+	if err != nil {
+		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
+		// return
+	}
+	if urls.Scheme == "" {
+		urls.Scheme = "https"
+	}
+
+	if strings.HasPrefix(word, "/") {
+		word = strings.TrimLeft(word, "/")
+	}
+
+	if strings.Contains(cfg.PostData, "FUZZ") || headerFUZZcheck(cfg.Headers) {
+		// fmt.Println(cfg.PostData)
+		fullURL = urls.String()
+		// } else if headerFUZZcheck(cfg.Headers) {
+		// 	// fmt.Println(header)
+		// 	fullURL = urls.String()
+	} else if strings.Contains(urls.String(), "FUZZ") {
+		fullURL = strings.Replace(urls.String(), "FUZZ", word, 1)
+	} else if strings.HasSuffix(urls.String(), "/") {
+		urlstr := strings.TrimRight(urls.String(), "/")
+		fullURL = fmt.Sprintf("%s/%s", urlstr, word)
+	} else {
+		fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
+	}
+	return fullURL
+}
+
+// Making http repuest func
+func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg Config, bar *progressbar.ProgressBar) {
+	defer func() {
+		<-semaphore // release semaphore
+		wg.Done()
+		bar.Add(1)
+	}()
+
+	fullURL := processUrls(url, word, cfg)
+	cfg.PostData = strings.Replace(cfg.PostData, "FUZZ", word, 1)
+
+	headers := make([]string, len(cfg.Headers))
+	copy(headers, cfg.Headers)
+	if headerFUZZcheck(cfg.Headers) {
+		for i, item := range headers {
+			headers[i] = strings.Replace(item, "FUZZ", word, 1)
+		}
+	}
+
+	// Reuse http.Request and http.Response using sync.Pool
+	request := acquireRequest()
+	defer releaseRequest(request)
+	request.URL, _ = neturl.Parse(fullURL)
+
+	// Set the HTTP method
+	if cfg.HttpMethod != "" {
+		request.Method = strings.ToUpper(cfg.HttpMethod)
+	} else {
+		request.Method = "GET"
+	}
+
+	// Set User-Agent in the request header
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+	if len(headers) > 0 {
+		for _, pair := range headers {
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				request.Header.Set(key, value)
+			}
+		}
+
+		// Check if "User-Agent" header is present, and if not, add it
+		if cfg.RandomUserAgent {
+			if _, exists := request.Header["User-Agent"]; !exists {
+				request.Header.Set("User-Agent", getRandomUserAgent())
+			}
+		}
+	} else if len(headers) == 0 && cfg.RandomUserAgent {
+		request.Header.Set("User-Agent", getRandomUserAgent())
+	}
+
+	// If PostData is provided, include it in the request body
+	if cfg.PostData != "" {
+		request.Body = ioutil.NopCloser(strings.NewReader(cfg.PostData))
+		request.GetBody = func() (io.ReadCloser, error) {
+			return ioutil.NopCloser(strings.NewReader(cfg.PostData)), nil
+		}
+
+		// Check if "Content-Type" header is present, and if not, add it
+		if _, exists := request.Header["Content-Type"]; !exists {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
+
+	//Test func call
+	// printFullRequest(request)
+
+	response := acquireResponse()
+	defer releaseResponse(response)
+
+	// Optionally wait for a user interrupt To exit gracefully
+	select {
+	case <-ctx.Done():
+		// Context canceled, exit gracefully
+		return
+	default:
+	}
+
+	// Make the HTTP request
+	resp, err := httpClient.Do(request.WithContext(ctx))
+	if err != nil {
+		debugModeEr(cfg.Debug, fullURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if cfg.WebCache {
+		// gologger.Info().Msg("Web Cache")
+		for key, val := range resp.Header {
+			if detectWebCache(key, val, fullURL, &mu) {
+				break
+			}
+		}
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		rateLimit(fullURL, resp.StatusCode, request)
+	}
+
+	var result Result
+	result.StatusCode = resp.StatusCode
+	result.Status = resp.Status
+	result.URL = fullURL
+	// result.ContentLength = resp.ContentLength
+	if resp.ContentLength != -1 {
+		result.ContentSize = resp.ContentLength
+	} else {
+		// If Content-Length is not set or is -1, read the response body to determine size
+		buffer := make([]byte, 10000)
+		for {
+			n, err := resp.Body.Read(buffer)
+			result.ContentSize = int64(n)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				result.ContentSize = resp.ContentLength
+			}
+		}
+	}
+
+	if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
+		result.Match = detectBodyMatch(fullURL, resp)
+	}
+
+	// Process the result
+	processResult(&result, cfg)
+}
+
+// http request just for web cache
+func webCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg Config, bar *progressbar.ProgressBar) {
+	defer func() {
+		<-semaphore // release semaphore
+		wg.Done()
+		bar.Add(1)
+	}()
+
+	var fullURL string
+
+	urls, err := neturl.Parse(url)
+	if err != nil {
+		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
+		return
+	}
+	if urls.Scheme == "" {
+		urls.Scheme = "https"
+	}
+
+	fullURL = urls.String()
+
+	// Reuse http.Request and http.Response using sync.Pool
+	request := acquireRequest()
+	defer releaseRequest(request)
+	request.URL, _ = neturl.Parse(fullURL)
+
+	// Set the HTTP method
+	if cfg.HttpMethod != "" {
+		request.Method = strings.ToUpper(cfg.HttpMethod)
+	} else {
+		request.Method = "GET"
+	}
+
+	// Set User-Agent in the request header
+	if request.Header == nil {
+		request.Header = make(http.Header)
+	}
+
+	if len(cfg.Headers) > 0 {
+		for _, pair := range cfg.Headers {
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				request.Header.Set(key, value)
+			}
+		}
+
+		// Check if "User-Agent" header is present, and if not, add it
+		if cfg.RandomUserAgent {
+			if _, exists := request.Header["User-Agent"]; !exists {
+				request.Header.Set("User-Agent", getRandomUserAgent())
+			}
+		}
+	} else if len(cfg.Headers) == 0 && cfg.RandomUserAgent {
+		request.Header.Set("User-Agent", getRandomUserAgent())
+	}
+
+	// If PostData is provided, include it in the request body
+	if cfg.PostData != "" {
+		request.Body = ioutil.NopCloser(strings.NewReader(cfg.PostData))
+		request.GetBody = func() (io.ReadCloser, error) {
+			return ioutil.NopCloser(strings.NewReader(cfg.PostData)), nil
+		}
+
+		// Check if "Content-Type" header is present, and if not, add it
+		if _, exists := request.Header["Content-Type"]; !exists {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
+
+	response := acquireResponse()
+	defer releaseResponse(response)
+
+	// Optionally wait for a user interrupt To exit gracefully
+	select {
+	case <-ctx.Done():
+		// Context canceled, exit gracefully
+		return
+	default:
+	}
+
+	// Make the HTTP request
+	resp, err := httpClient.Do(request.WithContext(ctx))
+	if err != nil {
+		debugModeEr(cfg.Debug, fullURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if cfg.WebCache {
+		// gologger.Info().Msg("Web Cache")
+		for key, val := range resp.Header {
+			if detectWebCache(key, val, fullURL, &mu) {
+				if resp.StatusCode == http.StatusTooManyRequests {
+					rateLimit(fullURL, resp.StatusCode, request)
+				}
+
+				var result Result
+				result.StatusCode = resp.StatusCode
+				result.Status = resp.Status
+				result.URL = fullURL
+				// result.ContentLength = resp.ContentLength
+				if resp.ContentLength != -1 {
+					result.ContentSize = resp.ContentLength
+				} else {
+					// If Content-Length is not set or is -1, read the response body to determine size
+					buffer := make([]byte, 10000)
+					for {
+						n, err := resp.Body.Read(buffer)
+						result.ContentSize = int64(n)
+						if err == io.EOF {
+							break
+						}
+						if err != nil {
+							result.ContentSize = resp.ContentLength
+						}
+					}
+				}
+
+				if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
+					result.Match = detectBodyMatch(fullURL, resp)
+				}
+
+				// Process the result
+				processResult(&result, cfg)
+				break
+			}
+		}
+	}
+}
+
+// detectWebCache identifies if the host is utilizing web caching, and if so, stores it.
+func detectWebCache(key string, vals []string, fullURL string, mu *sync.Mutex) bool {
+	var cacheHeaders = []string{"X-Cache", "Cf-Cache-Status", "Cache-Control", "Vary", "Age", "Server-Timing"}
+	cacheFound := false // Track if cache is found
+
+	for _, header := range cacheHeaders {
+		if strings.EqualFold(key, header) {
+			if key == "X-Cache" || key == "Cf-Cache-Status" {
+				for _, val := range vals {
+					lowerVal := strings.ToLower(val)
+					if strings.Contains(lowerVal, "hit") || strings.Contains(lowerVal, "miss") {
+						cacheFound = true
+						mu.Lock()
+						defer mu.Unlock()
+
+						// Ensure the cache file is created and opened if not already done
+						if cfg.Cachefile == nil {
+							file, err := os.OpenFile("discoveredWebCache.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+							if err != nil {
+								gologger.Fatal().Msgf("Error opening WebCache file: %v", err)
+							}
+							cfg.Cachefile = file
+						}
+						// Write the URL to the cache file
+						_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
+						if err != nil {
+							gologger.Fatal().Msgf("Error writing to WebCache file: %v\n", err)
+						}
+					}
+				}
+			}
+		}
+	}
+	return cacheFound
+}
+
+// check that the status code matches the response status code, then store the outcome to a file.
+func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
+	if (sCode >= 200 && sCode <= 299) || sCode == 301 || sCode == 302 || sCode == 307 || sCode == 401 || sCode == 403 || sCode == 405 || sCode == 500 {
+		gologger.Print().Msgf("\r\033[K%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+		if cfg.SuccessFile != nil {
+			// Save the URL To the success file
+			_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
+			if err != nil {
+				gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+			}
+		}
+	} else if len(cfg.MatchStatus) > 0 {
+		if strings.Contains(statusStr, mSCodes) {
+			gologger.Print().Msgf("\r\033[K%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
+			// Save the URL To the success file
+			if cfg.SuccessFile != nil {
+				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
+				if err != nil {
+					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+				}
+			}
+		}
+	}
+}
+
+// processResult handles the result of an HTTP request
+func processResult(result *Result, cfg Config) {
+	var mS string
+	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
+		mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mS)
+	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) == 0 {
+		mSCode := cfg.MatchStatus
+		for _, mSCodes := range mSCode {
+			if strings.Contains(result.Status, mSCodes) {
+				mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mSCodes)
+			}
+		}
+	} else if len(cfg.MatchStrings) > 0 && len(cfg.MatchStatus) == 0 {
+		if result.Match {
+			gologger.Print().Msgf("\r\033[K%s %s[ContentSize: %d, Status: %v]%s", result.URL, Cyan, result.ContentSize, result.Status, Reset)
+			// Save the URL To the success file
+			if cfg.SuccessFile != nil {
+				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", result.URL)
+				if err != nil {
+					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
+				}
+			}
+		}
+	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) > 0 {
+		gologger.Fatal().Msgf("Can't run -mc and -ms/-mt together")
+	}
+}
+
+// rate limit for the http request
+func rateLimit(fullURL string, sCode int, request *http.Request) {
+	retryAttempts := 0
+	maxRetries := cfg.Retries
+	for retryAttempts < maxRetries {
+		retryAttempts++
+		// Exponential backoff: wait for 2^retryAttempts seconds before retrying
+		backoffDuration := time.Duration(2<<retryAttempts+1) * time.Second
+		// log.Printf(Yellow+"Received 429 Too Many Requests. Retrying in %v seconds..."+Reset, backoffDuration.Seconds())
+		time.Sleep(backoffDuration)
+		// cfg.httpClient To httpClient
+		resp, err := httpClient.Do(request)
+		if err != nil {
+			debugModeEr(cfg.Debug, fullURL, err)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusTooManyRequests {
+			break
+		}
+	}
+	if sCode == http.StatusTooManyRequests {
+		debugModeEr(cfg.Debug, fullURL, errors.New("429 TooManyRequests"))
+		return
+	}
+}
+
+// it read the response body
+func readResponseBody(resp *http.Response, fullUrl string) ([]byte, error) {
+	// Create a new io.Reader from the response body
+	bodyReader := resp.Body
+
+	// Close the response body
+	defer bodyReader.Close()
+
+	// Read the response body into a buffer
+	var bodyBuffer bytes.Buffer
+	_, err := io.Copy(&bodyBuffer, bodyReader)
+
+	if err != nil {
+		debugModeEr(cfg.Debug, fullUrl, err)
+		return nil, err
+	}
+
+	return bodyBuffer.Bytes(), nil
+}
+
+// check if the match status code is a number
+func chMSForNU(numbers []interface{}) bool {
+	for _, num := range numbers {
+		// Type assertion to convert interface{} to string
+		strNum, ok := num.(string)
+		if !ok {
+			// If the type assertion fails, it's not a string
+			return false
+		}
+
+		_, err := strconv.Atoi(strNum)
+		if err != nil {
+			// If an error occurs during conversion, it's not a number
+			return false
+		}
+	}
+
+	// If all elements passed the checks, it contains only numbers
+	return true
+}
+
+// to check if respdata contains a string
+func matchRespData(body []byte, raw []string) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	for _, data := range raw {
+		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Check if the http response has a specific string
+func detectBodyMatch(fullURL string, resp *http.Response) bool {
+	body, err := readResponseBody(resp, fullURL)
+	if err != nil {
+		debugModeEr(cfg.Debug, fullURL, err)
+		return false
+	}
+
+	bodyReader := bytes.NewReader(body)
+	bodyTitle, err := goquery.NewDocumentFromReader(bodyReader)
+	if err != nil {
+		debugModeEr(cfg.Debug, fullURL, err)
+		return false
+	}
+
+	title := bodyTitle.Find("title").Text()
+	responseText := bodyTitle.Text()
+
+	if matchRespData([]byte(responseText), cfg.MatchStrings) || matchRespData([]byte(title), cfg.MatchStrings) {
+		return true
+	} else {
+		return false
+	}
+}
+
+// progbar initializes and returns a new progress bar with the specified number of steps
+func progbar(progNum int) *progressbar.ProgressBar {
+	bar := progressbar.NewOptions(progNum,
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionSetDescription("Processing"),
+		progressbar.OptionShowCount(),
+		progressbar.OptionShowIts(),
+		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionOnCompletion(func() {
+			fmt.Fprint(os.Stderr, "\n")
+		}),
+		// progressbar.OptionSpinnerType(14),
+		// progressbar.OptionThrottle(65*time.Millisecond),
+	)
+	return bar
+}
+
+// The main func
+func main() {
+	// Check if no arguments are provided (excluding the program name)
+	if len(os.Args) == 1 {
+		fmt.Println("No arguments provided.[-h/--help for help]")
+		os.Exit(0)
 	}
 
 	// Create a context with cancellation ability
@@ -235,20 +820,13 @@ func main() {
 		select {
 		case sig := <-signalCh:
 			// golog.Info("Caught keyboard: ", sig, "(Ctrl-C)")
+			fmt.Println("\r\033[K")
 			gologger.Info().Msgf("Caught keyboard: %v (Ctrl-C)", sig)
 			cancel()
 		case <-ctx.Done():
 			// Context canceled, no need To handle signals
 		}
 	}()
-
-	if cfg.HttpMethod == "" {
-		// golog.Info("HTTP Method : ", Yellow+"[GET]"+Reset)
-		gologger.Info().Msgf("HTTP Method : %s[GET]%s", Yellow, Reset)
-	} else {
-		// golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
-		gologger.Info().Msgf("HTTP Method : %s[%s]%s", Yellow, strings.ToUpper(cfg.HttpMethod), Reset)
-	}
 
 	var matchStatusList []interface{}
 	for _, status := range cfg.MatchStatus {
@@ -258,28 +836,42 @@ func main() {
 		gologger.Fatal().Msg("Match Status Must Be Numbers")
 	}
 
-	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
-		// golog.Info("Match Status Code : ", Yellow+"[200-299,301,302,307,401,403,405,500]"+Reset)
-		gologger.Info().Msgf("Match Status Code : %s[200-299,301,302,307,401,403,405,500]%s", Yellow, Reset)
-	} else if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) > 0 {
-		gologger.Info().Msgf("Match Status Code : %s[200]%s", Yellow, Reset)
-	} else {
-		// golog.Info("Match Status Code : ", Yellow, cfg.MatchStatus, Reset)
-		gologger.Info().Msgf("Match Status Code : %s%v%s", Yellow, cfg.MatchStatus, Reset)
-	}
-	if len(cfg.MatchStrings) > 0 {
-		// golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
-		gologger.Info().Msgf("Match Strings : %sEnable %v%s", Yellow, cfg.MatchStrings, Reset)
-	}
-	if cfg.WebCache {
-		// golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
-		gologger.Info().Msgf("Detect Web Cache : %sEnabled%s", Yellow, Reset)
+	if !cfg.Silent {
+		gologger.Print().Msgf("%s %s", Banner, version)
+		if cfg.HttpMethod == "" {
+			// golog.Info("HTTP Method : ", Yellow+"[GET]"+Reset)
+			gologger.Info().Msgf("HTTP Method : %s[GET]%s", Yellow, Reset)
+		} else {
+			// golog.Info("HTTP Method : ", Yellow, "[", strings.ToUpper(cfg.HttpMethod), "]", Reset)
+			gologger.Info().Msgf("HTTP Method : %s[%s]%s", Yellow, strings.ToUpper(cfg.HttpMethod), Reset)
+		}
+		if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
+			// golog.Info("Match Status Code : ", Yellow+"[200-299,301,302,307,401,403,405,500]"+Reset)
+			gologger.Info().Msgf("Match Status Code : %s[200-299,301,302,307,401,403,405,500]%s", Yellow, Reset)
+		} else if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) > 0 {
+			gologger.Info().Msgf("Match Status Code : %s[200]%s", Yellow, Reset)
+		} else {
+			// golog.Info("Match Status Code : ", Yellow, cfg.MatchStatus, Reset)
+			gologger.Info().Msgf("Match Status Code : %s%v%s", Yellow, cfg.MatchStatus, Reset)
+		}
+		if len(cfg.MatchStrings) > 0 {
+			// golog.Info("Match Title : ", Yellow, "Enable", cfg.MatchStrings, Reset)
+			gologger.Info().Msgf("Match Strings : %sEnable %v%s", Yellow, cfg.MatchStrings, Reset)
+		}
+		if cfg.WebCache {
+			// golog.Info("Detect Web Cache : ", Yellow, "Enabled", Reset)
+			gologger.Info().Msgf("Detect Web Cache : %sEnabled%s", Yellow, Reset)
+		}
 	}
 
 	if !cfg.WebCache {
-		if cfg.WordlistFile == "" || (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
+		if cfg.WordlistFile == "" && (cfg.UrlFile == "" && len(cfg.UrlString) == 0) {
 			// golog.Fatal(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
 			gologger.Fatal().Msgf(Red + "Please specify wordlist and target using -w/-wordlist, -l or -u" + Reset)
+		} else if cfg.WordlistFile == "" {
+			gologger.Fatal().Msgf(Red + "Please specify target using -w/-wordlist" + Reset)
+		} else if cfg.UrlFile == "" && len(cfg.UrlString) == 0 {
+			gologger.Fatal().Msgf(Red + "Please specify target using -l or -u" + Reset)
 		}
 	} else {
 		if cfg.UrlFile == "" && len(cfg.UrlString) == 0 {
@@ -343,33 +935,29 @@ func main() {
 		defer cfg.SuccessFile.Close()
 	}
 
-	if cfg.WebCache {
-		cfg.Cachefile, err = os.OpenFile("discoveredWebCache.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
-		if err != nil {
-			// golog.Fatal("Error opening log file: ", err)
-			gologger.Fatal().Msgf("Error opening WebCache file: %s", err)
-		}
-		defer cfg.Cachefile.Close()
-	}
-
 	// Use a WaitGroup To wait for all goroutines To finish
 	var wg sync.WaitGroup
+
+	// Define a progress bar pointer
+	var bar *progressbar.ProgressBar
 
 	// Create a semaphore To limit concurrency
 	semaphore := make(chan struct{}, cfg.Concurrency)
 
 	if cfg.WebCache && cfg.WordlistFile == "" {
+		bar = progbar(len(urls))
 		for _, url := range urls {
 			wg.Add(1)               // Increment the wait group counter
 			semaphore <- struct{}{} // acquire semaphore
-			go webCacheRequest(url, &wg, semaphore, ctx, cfg)
+			go webCacheRequest(url, &wg, semaphore, ctx, cfg, bar)
 		}
 	} else {
+		bar = progbar(len(words) * len(urls))
 		for _, word := range words {
 			for _, url := range urls {
 				wg.Add(1)               // Increment the wait group counter
 				semaphore <- struct{}{} // acquire semaphore
-				go makeRequest(url, word, &wg, semaphore, ctx, cfg)
+				go makeRequest(url, word, &wg, semaphore, ctx, cfg, bar)
 			}
 		}
 	}
@@ -388,481 +976,39 @@ func main() {
 	default:
 	}
 
-	elapsedTime := time.Since(startTime)
-	// golog.Info("Total time taken: ", elapsedTime)
-	gologger.Info().Msgf("Total time taken: %s\n", elapsedTime)
+	bar.Finish()
 }
 
-func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg config) {
-	defer func() {
-		<-semaphore // release semaphore
-		wg.Done()
-	}()
+// A test func to print the full HTTP request
+/* func printFullRequest(req *http.Request) {
+	// Create a buffer to store the request details
+	var requestBuffer bytes.Buffer
 
-	var fullURL string
+	// Print the request line (method, URL, protocol)
+	fmt.Fprintf(&requestBuffer, "%s %s %s\n", req.Method, req.URL.RequestURI(), req.Proto)
 
-	urls, err := neturl.Parse(url)
-	if err != nil {
-		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
-		return
-	}
-	if urls.Scheme == "" {
-		urls.Scheme = "https"
-	}
-
-	if strings.HasPrefix(word, "/") {
-		word = strings.TrimLeft(word, "/")
-	}
-	if strings.HasSuffix(urls.String(), "/") {
-		urlstr := strings.TrimRight(urls.String(), "/")
-		fullURL = fmt.Sprintf("%s/%s", urlstr, word)
-	} else {
-		fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
-	}
-
-	// Reuse http.Request and http.Response using sync.Pool
-	request := acquireRequest()
-	defer releaseRequest(request)
-	request.URL, _ = neturl.Parse(fullURL)
-
-	// Set the HTTP method
-	if cfg.HttpMethod != "" {
-		request.Method = strings.ToUpper(cfg.HttpMethod)
-	} else {
-		request.Method = "GET"
-	}
-
-	// Set User-Agent in the request header
-	if request.Header == nil {
-		request.Header = make(http.Header)
-	}
-
-	if len(cfg.Headers) > 0 {
-		for _, pair := range cfg.Headers {
-			result := strings.Split(pair, ":")
-			key, value := result[0], result[1]
-			request.Header.Set(key, value)
-		}
-		// Check if "User-Agent" header is present, and if not, add it
-		if _, exists := request.Header["User-Agent"]; !exists {
-			request.Header.Set("User-Agent", getRandomUserAgent())
-		}
-	} else if len(cfg.Headers) == 0 && cfg.RandomUserAgent {
-		request.Header.Set("User-Agent", getRandomUserAgent())
-	}
-
-	// If it's a POST request and data is provided, include data in the request body
-	if request.Method == "POST" && cfg.PostData != "" {
-		request.Body = ioutil.NopCloser(strings.NewReader(cfg.PostData))
-		request.GetBody = func() (io.ReadCloser, error) {
-			return ioutil.NopCloser(strings.NewReader(cfg.PostData)), nil
-		}
-		// Check if "Content-Type" header is present, and if not, add it
-		if _, exists := request.Header["Content-Type"]; !exists {
-			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Print the headers
+	for key, values := range req.Header {
+		for _, value := range values {
+			fmt.Fprintf(&requestBuffer, "%s: %s\n", key, value)
 		}
 	}
 
-	response := acquireResponse()
-	defer releaseResponse(response)
+	// Print a blank line between headers and body
+	fmt.Fprint(&requestBuffer, "\n")
 
-	// Optionally wait for a user interrupt To exit gracefully
-	select {
-	case <-ctx.Done():
-		// Context canceled, exit gracefully
-		return
-	default:
-	}
-
-	// Make the HTTP request
-	resp, err := httpClient.Do(request.WithContext(ctx))
-	if err != nil {
-		debugModeEr(cfg.Debug, fullURL, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if cfg.WebCache {
-		// gologger.Info().Msg("Web Cache")
-		for key, val := range resp.Header {
-			if detectWebCache(key, val, fullURL) {
-				break
-			}
-		}
-	}
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		rateLimit(fullURL, resp.StatusCode, request)
-	}
-
-	var result Result
-	result.StatusCode = resp.StatusCode
-	result.Status = resp.Status
-	result.URL = fullURL
-	// result.ContentLength = resp.ContentLength
-	if resp.ContentLength != -1 {
-		result.ContentSize = resp.ContentLength
-	} else {
-		// If Content-Length is not set or is -1, read the response body to determine size
-		buffer := make([]byte, 10000)
-		for {
-			n, err := resp.Body.Read(buffer)
-			result.ContentSize = int64(n)
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				result.ContentSize = resp.ContentLength
-			}
-		}
-	}
-
-	if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
-		result.Match = detectBodyMatch(fullURL, resp)
-	}
-
-	// Process the result
-	processResult(result, cfg)
-}
-
-func webCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ctx context.Context, cfg config) {
-	defer func() {
-		<-semaphore // release semaphore
-		wg.Done()
-	}()
-
-	var fullURL string
-
-	urls, err := neturl.Parse(url)
-	if err != nil {
-		gologger.Error().Msgf(Red + "Invalid URL: " + url + Reset)
-		return
-	}
-	if urls.Scheme == "" {
-		urls.Scheme = "https"
-	}
-
-	fullURL = urls.String()
-
-	// Reuse http.Request and http.Response using sync.Pool
-	request := acquireRequest()
-	defer releaseRequest(request)
-	request.URL, _ = neturl.Parse(fullURL)
-
-	// Set the HTTP method
-	if cfg.HttpMethod != "" {
-		request.Method = strings.ToUpper(cfg.HttpMethod)
-	} else {
-		request.Method = "GET"
-	}
-
-	// Set User-Agent in the request header
-	if request.Header == nil {
-		request.Header = make(http.Header)
-	}
-
-	if len(cfg.Headers) > 0 {
-		for _, pair := range cfg.Headers {
-			result := strings.Split(pair, ":")
-			key, value := result[0], result[1]
-			request.Header.Set(key, value)
-		}
-		// Check if "User-Agent" header is present, and if not, add it
-		if _, exists := request.Header["User-Agent"]; !exists {
-			request.Header.Set("User-Agent", getRandomUserAgent())
-		}
-	} else if len(cfg.Headers) == 0 && cfg.RandomUserAgent {
-		request.Header.Set("User-Agent", getRandomUserAgent())
-	}
-
-	// If it's a POST request and data is provided, include data in the request body
-	if request.Method == "POST" && cfg.PostData != "" {
-		request.Body = ioutil.NopCloser(strings.NewReader(cfg.PostData))
-		request.GetBody = func() (io.ReadCloser, error) {
-			return ioutil.NopCloser(strings.NewReader(cfg.PostData)), nil
-		}
-		// Check if "Content-Type" header is present, and if not, add it
-		if _, exists := request.Header["Content-Type"]; !exists {
-			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
-	}
-
-	response := acquireResponse()
-	defer releaseResponse(response)
-
-	// Optionally wait for a user interrupt To exit gracefully
-	select {
-	case <-ctx.Done():
-		// Context canceled, exit gracefully
-		return
-	default:
-	}
-
-	// Make the HTTP request
-	resp, err := httpClient.Do(request.WithContext(ctx))
-	if err != nil {
-		debugModeEr(cfg.Debug, fullURL, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if cfg.WebCache {
-		// gologger.Info().Msg("Web Cache")
-		for key, val := range resp.Header {
-			if detectWebCache(key, val, fullURL) {
-				if resp.StatusCode == http.StatusTooManyRequests {
-					rateLimit(fullURL, resp.StatusCode, request)
-				}
-			
-				var result Result
-				result.StatusCode = resp.StatusCode
-				result.Status = resp.Status
-				result.URL = fullURL
-				// result.ContentLength = resp.ContentLength
-				if resp.ContentLength != -1 {
-					result.ContentSize = resp.ContentLength
-				} else {
-					// If Content-Length is not set or is -1, read the response body to determine size
-					buffer := make([]byte, 10000)
-					for {
-						n, err := resp.Body.Read(buffer)
-						result.ContentSize = int64(n)
-						if err == io.EOF {
-							break
-						}
-						if err != nil {
-							result.ContentSize = resp.ContentLength
-						}
-					}
-				}
-			
-				if len(cfg.MatchStrings) > 0 && resp.StatusCode == http.StatusOK {
-					result.Match = detectBodyMatch(fullURL, resp)
-				}
-			
-				// Process the result
-				processResult(result, cfg)
-				break
-			}
-		}
-	}
-}
-
-func detectWebCache(key string, vals []string, fullURL string) bool {
-	var cacheHeaders = []string{"X-Cache", "Cf-Cache-Status", "Cache-Control", "Vary", "Age", "Server-Timing"}
-	for _, header := range cacheHeaders {
-		if strings.EqualFold(key, header) {
-			if key == "X-Cache" || key == "Cf-Cache-Status" {
-				for _, val := range vals {
-					if strings.Contains(strings.ToLower(val), "hit") || strings.Contains(strings.ToLower(val), "miss") {
-						// if strings.ToLower(val) == "hit" || strings.ToLower(val) == "miss" {
-						// Save the URL To the success file
-						_, err := fmt.Fprintf(cfg.Cachefile, "%s\n", fullURL)
-						if err != nil {
-							// golog.Fatal("Error writing To WebCache file: ", err)
-							gologger.Fatal().Msgf("Error writing To WebCache file: %v\n", err)
-						}
-						return true
-					}
-				}
-			}
-		}
-	}
-	return false
-}
-
-func mStatus(sCode int, cLen int64, fUrl, statusStr, mSCodes string) {
-	if (sCode >= 200 && sCode <= 299) || sCode == 301 || sCode == 302 || sCode == 307 || sCode == 401 || sCode == 403 || sCode == 405 || sCode == 500 {
-		gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
-		if cfg.SuccessFile != nil {
-			// Save the URL To the success file
-			_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
-			if err != nil {
-				gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
-			}
-		}
-	} else if len(cfg.MatchStatus) > 0 {
-		if strings.Contains(statusStr, mSCodes) {
-			gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", fUrl, Cyan, cLen, statusStr, Reset)
-			// Save the URL To the success file
-			if cfg.SuccessFile != nil {
-				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", fUrl)
-				if err != nil {
-					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
-				}
-			}
-		}
-	}
-}
-
-// processResult handles the result of an HTTP request
-func processResult(result Result, cfg config) {
-	var mS string
-	if len(cfg.MatchStatus) == 0 && len(cfg.MatchStrings) == 0 {
-		mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mS)
-	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) == 0 {
-		mSCode := cfg.MatchStatus
-		for _, mSCodes := range mSCode {
-			if strings.Contains(result.Status, mSCodes) {
-				mStatus(result.StatusCode, result.ContentSize, result.URL, result.Status, mSCodes)
-			}
-		}
-	} else if len(cfg.MatchStrings) > 0 && len(cfg.MatchStatus) == 0 {
-		if result.Match {
-			gologger.Print().Msgf("%s %s[ContentSize: %d, Status: %v]%s", result.URL, Cyan, result.ContentSize, result.Status, Reset)
-			// Save the URL To the success file
-			if cfg.SuccessFile != nil {
-				_, err := fmt.Fprintf(cfg.SuccessFile, "%s\n", result.URL)
-				if err != nil {
-					gologger.Fatal().Msgf("Error writing To success file: %v\n", err)
-				}
-			}
-		}
-	} else if len(cfg.MatchStatus) > 0 && len(cfg.MatchStrings) > 0 {
-		gologger.Fatal().Msgf("Can't run -mc and -ms/-mt together")
-	}
-}
-
-func rateLimit(fullURL string, sCode int, request *http.Request) {
-	retryAttempts := 0
-	maxRetries := cfg.Retries
-	for retryAttempts < maxRetries {
-		retryAttempts++
-		// Exponential backoff: wait for 2^retryAttempts seconds before retrying
-		backoffDuration := time.Duration(2<<retryAttempts+1) * time.Second
-		// log.Printf(Yellow+"Received 429 Too Many Requests. Retrying in %v seconds..."+Reset, backoffDuration.Seconds())
-		time.Sleep(backoffDuration)
-		// cfg.httpClient To httpClient
-		resp, err := httpClient.Do(request)
+	// Print the body, if present
+	if req.Body != nil {
+		bodyBytes, err := ioutil.ReadAll(req.Body)
 		if err != nil {
-			debugModeEr(cfg.Debug, fullURL, err)
+			fmt.Println("Error reading request body:", err)
 			return
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusTooManyRequests {
-			break
-		}
-	}
-	if sCode == http.StatusTooManyRequests {
-		debugModeEr(cfg.Debug, fullURL, errors.New("429 TooManyRequests"))
-		return
-	}
-}
-
-func readResponseBody(resp *http.Response, fullUrl string) ([]byte, error) {
-	// Create a new io.Reader from the response body
-	bodyReader := resp.Body
-
-	// Close the response body
-	defer bodyReader.Close()
-
-	// Read the response body into a buffer
-	var bodyBuffer bytes.Buffer
-	_, err := io.Copy(&bodyBuffer, bodyReader)
-
-	if err != nil {
-		debugModeEr(cfg.Debug, fullUrl, err)
-		return nil, err
+		req.Body = ioutil.NopCloser(bytes.NewReader(bodyBytes)) // Reset body after reading
+		requestBuffer.Write(bodyBytes)
 	}
 
-	return bodyBuffer.Bytes(), nil
+	// Print the complete request
+	fmt.Print(requestBuffer.String() + "\n")
 }
-
-func chMSForNU(numbers []interface{}) bool {
-	for _, num := range numbers {
-		// Type assertion to convert interface{} to string
-		strNum, ok := num.(string)
-		if !ok {
-			// If the type assertion fails, it's not a string
-			return false
-		}
-
-		_, err := strconv.Atoi(strNum)
-		if err != nil {
-			// If an error occurs during conversion, it's not a number
-			return false
-		}
-	}
-
-	// If all elements passed the checks, it contains only numbers
-	return true
-}
-
-func matchRespData(body []byte, raw []string) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	for _, data := range raw {
-		if strings.Contains(strings.ToLower(string(body)), strings.ToLower(data)) {
-			return true
-		}
-	}
-	return false
-}
-
-func detectBodyMatch(fullURL string, resp *http.Response) bool {
-	body, err := readResponseBody(resp, fullURL)
-	if err != nil {
-		debugModeEr(cfg.Debug, fullURL, err)
-		return false
-	}
-
-	bodyReader := bytes.NewReader(body)
-	bodyTitle, err := goquery.NewDocumentFromReader(bodyReader)
-	if err != nil {
-		debugModeEr(cfg.Debug, fullURL, err)
-		return false
-	}
-
-	title := bodyTitle.Find("title").Text()
-	responseText := bodyTitle.Text()
-
-	if matchRespData([]byte(responseText), cfg.MatchStrings) || matchRespData([]byte(title), cfg.MatchStrings) {
-		return true
-	} else {
-		return false
-	}
-}
-
-func debugModeEr(debug bool, urlStr string, message error) {
-	if debug {
-		gologger.Error().Msgf("Error %s: %v", urlStr, message)
-	}
-}
-
-// Select a random User-Agent from the list
-func getRandomUserAgent() string {
-	return cfg.UserAgents[rand.Intn(len(cfg.UserAgents))]
-}
-
-// HTTP Pool
-func acquireRequest() *http.Request {
-	return requestPool.Get().(*http.Request)
-}
-func releaseRequest(req *http.Request) {
-	req.URL = nil
-	requestPool.Put(req)
-}
-func acquireResponse() *http.Response {
-	return responsePool.Get().(*http.Response)
-}
-func releaseResponse(resp *http.Response) {
-	responsePool.Put(resp)
-}
-
-// Reading A File Line By Line
-func readLines(filename string) ([]string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	return lines, scanner.Err()
-}
+*/
