@@ -1,4 +1,4 @@
-module github.com/SpeedyQweku/qfuzz/v0
+module github.com/SpeedyQweku/qfuzz
 
 go 1.21.6
 
