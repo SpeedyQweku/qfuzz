@@ -1,17 +1,16 @@
-module github.com/SpeedyQweku/qfuzz
+module github.com/SpeedyQweku/qfuzz/v0
 
 go 1.21.6
 
 require (
-	github.com/PuerkitoBio/goquery v1.8.1
 	github.com/projectdiscovery/goflags v0.1.37
 	github.com/projectdiscovery/gologger v1.1.12
 	github.com/schollz/progressbar/v3 v3.14.3
+	golang.org/x/net v0.17.0
 )
 
 require (
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/cnf/structhash v0.0.0-20201127153200-e1b16c1ebc08 // indirect
@@ -39,7 +38,6 @@ require (
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db // indirect
 	golang.org/x/mod v0.12.0 // indirect
-	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sys v0.20.0 // indirect
 	golang.org/x/term v0.20.0 // indirect
 	golang.org/x/tools v0.13.0 // indirect
