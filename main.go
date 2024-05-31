@@ -398,6 +398,9 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 		}
 	}
 
+	//Test func call
+	// printFullRequest(request)
+
 	response := acquireResponse()
 	defer releaseResponse(response)
 
