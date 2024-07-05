@@ -31,14 +31,14 @@ import (
 
 const (
 	version = "v0.2.5"
-	Reset  = "\033[0m"
-	Red    = "\033[31m"
-	Blue   = "\033[34m"
-	Yellow = "\033[33m"
-	Cyan   = "\033[36m"
-	Green  = "\033[32m"
-	White  = "\033[37m"
-	Banner = White + ` 
+	Reset   = "\033[0m"
+	Red     = "\033[31m"
+	Blue    = "\033[34m"
+	Yellow  = "\033[33m"
+	Cyan    = "\033[36m"
+	Green   = "\033[32m"
+	White   = "\033[37m"
+	Banner  = White + ` 
 	 ██████╗ ███████╗██╗   ██╗███████╗███████╗
 	██╔═══██╗██╔════╝██║   ██║╚══███╔╝╚══███╔╝
 	██║   ██║█████╗  ██║   ██║  ███╔╝   ███╔╝ 
@@ -104,10 +104,9 @@ var (
 		},
 	}
 
-	cfg     Config
-	mu      sync.Mutex
+	cfg Config
+	mu  sync.Mutex
 )
-
 
 func init() {
 	flagSet := goflags.NewFlagSet()
@@ -221,6 +220,7 @@ var httpClient = &http.Client{
 		MaxConnsPerHost:     500,
 		IdleConnTimeout:     time.Duration(time.Duration(cfg.To) * time.Second),
 		DisableKeepAlives:   false, // Enable connection reuse
+		// DisableCompression:  true,
 		DialContext: (&net.Dialer{
 			Timeout: time.Duration(time.Duration(cfg.To) * time.Second),
 		}).DialContext,
@@ -408,6 +408,8 @@ func makeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	select {
 	case <-ctx.Done():
 		// Context canceled, exit gracefully
+		// bar.Finish()
+		os.Exit(0)
 		return
 	default:
 	}
@@ -541,6 +543,8 @@ func webCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ct
 	select {
 	case <-ctx.Done():
 		// Context canceled, exit gracefully
+		// bar.Finish()
+		os.Exit(0)
 		return
 	default:
 	}
@@ -1208,7 +1212,8 @@ func main() {
 		select {
 		case sig := <-signalCh:
 			fmt.Println("\r\033[K")
-			gologger.Info().Msgf("Caught keyboard: %v (Ctrl-C)", sig)
+			gologger.Info().Msgf("[WARN] Caught keyboard: %v (Ctrl-C)", sig)
+			fmt.Println("\r\033[K")
 			cancel()
 		case <-ctx.Done():
 			// Context canceled, no need To handle signals
@@ -1261,6 +1266,7 @@ func main() {
 	select {
 	case <-ctx.Done():
 		// Context canceled, exit gracefully
+		bar.Finish()
 		return
 	default:
 	}
