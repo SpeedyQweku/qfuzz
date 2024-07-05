@@ -5,7 +5,7 @@ qfuzz`(quickFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.2.5
+go install github.com/SpeedyQweku/qfuzz@v0.2.5a
 ```
 
 ## Usage
