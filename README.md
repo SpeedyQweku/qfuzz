@@ -5,17 +5,18 @@ qfuzz`(quickFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v0.2.5a
+go install github.com/SpeedyQweku/qfuzz@v1.0.0
 ```
 
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v0.2.5
+qfuzz, fuzz, and more - v1.0.0
 
+Flags:
 INPUT OPTIONS:
    -wordlist, -w string  Wordlist file path
-   -list, -l string      Target file path
+   -list, -l string      Target URL file path
    -u string[]           Target URL(s) (-u https://example.com,https://example.org)
 
 OUTPUT OPTIONS:
