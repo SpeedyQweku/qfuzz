@@ -11,7 +11,7 @@ go install github.com/SpeedyQweku/qfuzz@latest
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v1.0.0
+qfuzz, fuzz, and more - v1.0.1
 
 Flags:
 INPUT OPTIONS:

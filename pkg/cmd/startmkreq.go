@@ -1,4 +1,4 @@
-package mkreq
+package cmd
 
 import (
 	"context"

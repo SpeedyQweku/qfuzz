@@ -11,10 +11,10 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/projectdiscovery/gologger"
 
-	"github.com/SpeedyQweku/qfuzz/pkg/parser"
+	"github.com/SpeedyQweku/qfuzz/pkg/cmd"
 	"github.com/SpeedyQweku/qfuzz/pkg/opt"
 	"github.com/SpeedyQweku/qfuzz/pkg/config"
-	"github.com/SpeedyQweku/qfuzz/pkg/mkreq"
+	"github.com/SpeedyQweku/qfuzz/pkg/parser"
 )
 
 
@@ -86,7 +86,7 @@ func main() {
 	semaphore := make(chan struct{}, config.Cfg.Concurrency)
 
 	// Start the requests
-	mkreq.StartRequests(ctx, &wg, semaphore, bar, words, urls)
+	cmd.StartRequests(ctx, &wg, semaphore, bar, words, urls)
 
 	// Start a goroutine To close the results channel once all requests are done
 	go func() {

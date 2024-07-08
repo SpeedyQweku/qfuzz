@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	Version = "v1.0.0"
+	Version = "v1.0.1"
 	Reset   = "\033[0m"
 	Red     = "\033[31m"
 	Blue    = "\033[34m"
