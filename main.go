@@ -27,7 +27,7 @@ func init() {
 func main() {
 	// Check if no arguments are provided (excluding the program name)
 	if len(os.Args) == 1 {
-		fmt.Println("No arguments provided.[-h/--help for help]")
+		gologger.Info().Msgf("No arguments provided.[-h/--help for help]")
 		os.Exit(0)
 	}
 
@@ -44,7 +44,7 @@ func main() {
 		select {
 		case sig := <-signalCh:
 			fmt.Println("\r\033[K")
-			gologger.Info().Msgf("[WARN] Caught keyboard: %v (Ctrl-C)", sig)
+			fmt.Printf("[WARN] Caught keyboard: %v (Ctrl-C)\n", sig)
 			fmt.Println("\r\033[K")
 			cancel()
 		case <-ctx.Done():

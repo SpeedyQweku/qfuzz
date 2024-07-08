@@ -9,10 +9,7 @@ import (
 	"github.com/projectdiscovery/gologger"
 	"github.com/schollz/progressbar/v3"
 
-	// "github.com/SpeedyQweku/qfuzz/pkg/common"
 	"github.com/SpeedyQweku/qfuzz/pkg/config"
-	// "github.com/SpeedyQweku/qfuzz/pkg/mkreq"
-	// "github.com/SpeedyQweku/qfuzz/pkg/output"
 )
 
 // var (
@@ -21,39 +18,43 @@ import (
 // 	// result config.Result
 // )
 
-
 // processUrls process the urls
 func ProcessUrls(url, word string, cfg config.Config) string {
 	var fullURL string
 
-	urls, err := neturl.Parse(url)
-	if err != nil {
-		gologger.Error().Msgf(config.Red + "Invalid URL: " + url + config.Reset)
-		// return
-	}
-	if urls.Scheme == "" {
-		urls.Scheme = "https"
-	}
-
-	if strings.HasPrefix(word, "/") {
-		word = strings.TrimLeft(word, "/")
-	}
-
-	if strings.Contains(config.Cfg.PostData, "FUZZ") || CheckFUZZheader(config.Cfg.Headers) {
-		// fmt.Println(config.Cfg.PostData)
-		fullURL = urls.String()
-		// } else if headerFUZZcheck(config.Cfg.Headers) {
-		// 	// fmt.Println(header)
-		// 	fullURL = urls.String()
-	} else if strings.Contains(urls.String(), "FUZZ") {
-		fullURL = strings.Replace(urls.String(), "FUZZ", word, 1)
-	} else if strings.HasSuffix(urls.String(), "/") {
-		urlstr := strings.TrimRight(urls.String(), "/")
-		fullURL = fmt.Sprintf("%s/%s", urlstr, word)
+	if url == "FUZZ" {
+		fullURL = strings.ReplaceAll(url, "FUZZ", word)
+		return fullURL
 	} else {
-		fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
+		urls, err := neturl.Parse(url)
+		if err != nil {
+			gologger.Error().Msgf(config.Red + "Invalid URL: " + url + config.Reset)
+			// return
+		}
+		if urls.Scheme == "" {
+			urls.Scheme = "https"
+		}
+
+		if strings.HasPrefix(word, "/") {
+			word = strings.TrimLeft(word, "/")
+		}
+
+		if strings.Contains(config.Cfg.PostData, "FUZZ") || CheckFUZZheader(config.Cfg.Headers) {
+			// fmt.Println(config.Cfg.PostData)
+			fullURL = urls.String()
+			// } else if headerFUZZcheck(config.Cfg.Headers) {
+			// 	// fmt.Println(header)
+			// 	fullURL = urls.String()
+		} else if strings.Contains(urls.String(), "FUZZ") {
+			fullURL = strings.Replace(urls.String(), "FUZZ", word, 1)
+		} else if strings.HasSuffix(urls.String(), "/") {
+			urlstr := strings.TrimRight(urls.String(), "/")
+			fullURL = fmt.Sprintf("%s/%s", urlstr, word)
+		} else {
+			fullURL = fmt.Sprintf("%s/%s", urls.String(), word)
+		}
+		return fullURL
 	}
-	return fullURL
 }
 
 // Save the URL To the success file

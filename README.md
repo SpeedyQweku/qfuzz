@@ -5,7 +5,7 @@ qfuzz`(quickFuzzer)`, web fuzzer, and more written in Go
 ## Installation
 
 ```bash
-go install github.com/SpeedyQweku/qfuzz@v1.0.0
+go install github.com/SpeedyQweku/qfuzz@latest
 ```
 
 ## Usage
@@ -100,6 +100,10 @@ By using the `FUZZ` keyword in URL(s)
 
 ```bash
 qfuzz -u https://target/?FUZZ=value -w < wordlist.txt >
+```
+
+```bash
+qfuzz -u FUZZ -w < wordlist.txt >
 ```
 
 By using the `FUZZ` keyword in Headers
