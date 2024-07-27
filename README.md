@@ -11,7 +11,7 @@ go install github.com/SpeedyQweku/qfuzz@latest
 ## Usage
 
 ```bash
-qfuzz, fuzz, and more - v1.0.1
+qfuzz, fuzz, and more - v1.0.2
 
 Flags:
 INPUT OPTIONS:
@@ -111,3 +111,21 @@ By using the `FUZZ` keyword in Headers
 ```bash
 qfuzz -u < URL > -w < wordlist.txt > -H "Content-Type: application/json","Host: FUZZ"
 ```
+
+## Future Development
+
+- New technique
+- Better output
+- Improve the use of the matchers and filter
+
+## Note
+
+Currently, qfuzz is just getting started. Although it is a good fuzzer, it can have bugs or limitations. I welcome feedback and suggestions to increase its reliability and functionality.
+
+## Disclaimer
+
+This tool is for educational and ethical testing purposes only. Always obtain proper authorization before using it.
+
+## Author
+
+Created by @SpeedyQweku
