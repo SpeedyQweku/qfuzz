@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/schollz/progressbar/v3"
@@ -122,8 +123,13 @@ func MakeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	default:
 	}
 
+	// Start timer
+	reqstart := time.Now()
 	// Make the HTTP request
 	resp, err := config.HttpClient.Do(request.WithContext(ctx))
+	// Calculate elapsed time
+	reqelapsed := time.Since(reqstart).Round(time.Millisecond)
+
 	if err != nil {
 		common.DebugModeEr(cfg.Debug, fullURL, err)
 		return
@@ -152,6 +158,7 @@ func MakeRequest(url, word string, wg *sync.WaitGroup, semaphore chan struct{}, 
 	result.StatusCode = resp.StatusCode
 	result.Status = resp.Status
 	result.URL = fullURL
+	result.Ttaken = reqelapsed
 
 	if resp.ContentLength != -1 {
 		result.ContentSize = resp.ContentLength
@@ -257,8 +264,12 @@ func WebCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ct
 	default:
 	}
 
+	// Start timer
+	reqstart := time.Now()
 	// Make the HTTP request
 	resp, err := config.HttpClient.Do(request.WithContext(ctx))
+	// Calculate elapsed time
+	reqelapsed := time.Since(reqstart).Round(time.Millisecond)
 	if err != nil {
 		common.DebugModeEr(cfg.Debug, fullURL, err)
 		return
@@ -288,6 +299,7 @@ func WebCacheRequest(url string, wg *sync.WaitGroup, semaphore chan struct{}, ct
 				result.StatusCode = resp.StatusCode
 				result.Status = resp.Status
 				result.URL = fullURL
+				result.Ttaken = reqelapsed
 
 				if resp.ContentLength != -1 {
 					result.ContentSize = resp.ContentLength

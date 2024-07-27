@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	Version = "v1.0.1"
+	Version = "v1.0.2"
 	Reset   = "\033[0m"
 	Red     = "\033[31m"
 	Blue    = "\033[34m"
@@ -32,11 +32,12 @@ const (
 
 // Result represents the result of an HTTP request.
 type Result struct {
-	StatusCode  int    // StatusCode is the HTTP status code returned by the server (e.g., 200, 404).
-	Status      string // Status is the HTTP status message returned by the server (e.g., "200 OK", "404 Not Found").
-	ContentSize int64  // ContentSize is the size of the response content in bytes.
-	URL         string // URL is the URL that was requested.
-	Match       bool   // Match indicates whether the response matched certain criteria (specific strings).
+	StatusCode  int           // StatusCode is the HTTP status code returned by the server (e.g., 200, 404).
+	Status      string        // Status is the HTTP status message returned by the server (e.g., "200 OK", "404 Not Found").
+	ContentSize int64         // ContentSize is the size of the response content in bytes.
+	URL         string        // URL is the URL that was requested.
+	Match       bool          // Match indicates whether the response matched certain criteria (specific strings).
+	Ttaken      time.Duration // Ttaken is the time taken to complete the request (Millisecond).
 }
 
 // Config holds configuration settings for the application.
